@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Pinch.Generate.Pretty where
 
@@ -23,21 +24,32 @@ data Module = Module
   }
   deriving (Show)
 
-data Pragma =
-  PragmaLanguage T.Text
+data Pragma
+  = PragmaLanguage T.Text
+  | PragmaOptsGhc T.Text
   deriving (Show)
 
 data ImportDecl = ImportDecl
   { iName :: ModuleName
   , iQualified :: Bool
+  , iThings :: ImportNames
   }
+  deriving (Show)
+
+data ImportNames
+  = IEverything
+  | IJust [ Name ]
   deriving (Show)
 
 data Decl
   = TypeDecl Type Type
-  | DataDecl TypeName [ConDecl]
+  | DataDecl TypeName [ConDecl] [Deriving]
   | InstDecl InstHead [Decl]
   | FunBind [Match]
+  deriving (Show)
+
+data Deriving
+  = DeriveClass Type
   deriving (Show)
 
 data ConDecl
@@ -76,6 +88,7 @@ data Exp
   | ECase Exp [Alt]
   | EDo [Stm]
   | EInfix Name Exp Exp
+  | EList [Exp]
   deriving (Show)
 
 data Stm
@@ -113,20 +126,33 @@ instance Pretty Module where
 instance Pretty Pragma where
   pretty p = case p of
     PragmaLanguage p -> "{-# LANGUAGE" <+> pretty p <+> "#-}"
+    PragmaOptsGhc o -> "{-# OPTIONS_GHC" <+> pretty o <+> "#-}"
 
 instance Pretty ImportDecl where
-  pretty i = "import" <+> (if (iQualified i) then "qualified" else "") <+> pretty (iName i)
+  pretty i = "import" <+> (if (iQualified i) then "qualified" else "") <+> pretty (iName i) <+> pretty (iThings i)
+
+instance Pretty ImportNames where
+  pretty i = case i of
+    IEverything -> ""
+    IJust xs -> parens $ cList $ map pretty xs
 
 instance Pretty Decl where
   pretty decl = case decl of
     TypeDecl t1 t2 -> "type" <+> pretty t1 <+> "=" <+> pretty t2
-    DataDecl t [] -> "data" <+> pretty t
-    DataDecl t (c:cs) -> nest 2 $ vsep $
+    DataDecl t [] ds -> "data" <+> pretty t <+> prettyDerivings ds
+    DataDecl t (c:cs) ds -> nest 2 $ vsep $
       [ "data" <+> pretty t
       , "=" <+> pretty c
-      ] ++ (map (\c -> "|" <+> pretty c) cs)
+      ] ++ (map (\c -> "|" <+> pretty c) cs) ++ [ prettyDerivings ds ]
     InstDecl h decls -> nest 2 $ vsep $ [ pretty h ] ++ map pretty decls
     FunBind ms -> vsep $ map pretty ms
+
+prettyDerivings :: [Deriving] -> Doc a
+prettyDerivings [] = ""
+prettyDerivings ds = "deriving" <+> (parens $ cList $ map pretty ds)
+
+instance Pretty Deriving where
+  pretty (DeriveClass c) = pretty c
 
 instance Pretty ConDecl where
   pretty (ConDecl n args) = hsep $ [ pretty n ] ++ map pretty args
@@ -142,7 +168,7 @@ instance Pretty Constraint where
 
 instance Pretty Type where
   pretty ty = case ty of
-    TyApp t1 ts -> pretty t1 <+> hsep (map pretty ts)
+    TyApp t1 ts -> parens $ pretty t1 <+> hsep (map pretty ts)
     TyCon t -> pretty t
 
 instance Pretty Match where
@@ -164,6 +190,7 @@ instance Pretty Exp where
     ECase e as -> nest 2 $ vsep $ ["case" <+> pretty e <+> "of"] ++ map pretty as
     EDo s -> nest 2 $ vsep $ ["do"] ++ map pretty s
     EInfix op e1 e2 -> hsep [ pretty e1, pretty op, pretty e2]
+    EList es -> "[" <+> cList (map pretty es) <+> "]"
 
 instance Pretty Alt where
   pretty (Alt p e) = pretty p <+> "->" <+> pretty e
