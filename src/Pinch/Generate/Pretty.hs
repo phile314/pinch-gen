@@ -9,12 +9,9 @@ import Data.Text.Prettyprint.Doc
 
 newtype ModuleName = ModuleName T.Text
   deriving (Show)
-newtype TypeName = TypeName T.Text
-  deriving (Show)
-newtype Name = Name T.Text
-  deriving (Show)
-newtype ClassName = ClassName T.Text
-  deriving (Show)
+type TypeName = T.Text
+type Name = T.Text
+type ClassName = T.Text
 
 data Module = Module
   { modName :: ModuleName
@@ -46,6 +43,7 @@ data Decl
   | DataDecl TypeName [ConDecl] [Deriving]
   | InstDecl InstHead [Decl]
   | FunBind [Match]
+  | TypeSigDecl Name Type
   deriving (Show)
 
 data Deriving
@@ -109,15 +107,6 @@ data Lit
 instance Pretty ModuleName where
   pretty (ModuleName x) = pretty x
 
-instance Pretty TypeName where
-  pretty (TypeName x) = pretty x
-
-instance Pretty Name where
-  pretty (Name x) = pretty x
-
-instance Pretty ClassName where
-  pretty (ClassName x) = pretty x
-
 instance Pretty Module where
   pretty mod = vsep
     (map pretty (modPragmas mod)
@@ -148,6 +137,7 @@ instance Pretty Decl where
       ] ++ (map (\c -> "|" <+> pretty c) cs) ++ [ prettyDerivings ds ]
     InstDecl h decls -> nest 2 $ vsep $ [ pretty h ] ++ map pretty decls
     FunBind ms -> vsep $ map pretty ms
+    TypeSigDecl n ty -> pretty n <+> "::" <+> pretty ty
 
 prettyDerivings :: [Deriving] -> Doc a
 prettyDerivings [] = ""
@@ -213,4 +203,4 @@ cList = concatWith (surround (comma <> space))
 
 
 instance IsString Exp where
-  fromString = EVar . Name . T.pack
+  fromString = EVar . T.pack
