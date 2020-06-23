@@ -30,13 +30,14 @@ generate :: Settings -> FilePath -> FilePath -> IO ()
 generate s inp out = do
   thrift <- loadFile inp
 
-  mod <- gProgram s inp thrift
+  mods <- gProgram s inp thrift
 
-  let targetFile = out </> moduleFile mod
 
-  createDirectoryIfMissing True (dropFileName targetFile)
 
-  withFile targetFile WriteMode (\h -> hPutDoc h $ pretty mod)
+  forM_ mods $ \mod -> do
+    let targetFile = out </> moduleFile mod
+    createDirectoryIfMissing True (dropFileName targetFile)
+    withFile targetFile WriteMode (\h -> hPutDoc h $ pretty mod)
 
 moduleFile :: H.Module -> FilePath
 moduleFile m =
@@ -70,25 +71,39 @@ loadFile inp = do
 
 
 
-gProgram :: Settings -> FilePath -> Program SourcePos -> IO H.Module
+gProgram :: Settings -> FilePath -> Program SourcePos -> IO [H.Module]
 gProgram s inp (Program headers defs) = do
-  (imports, maps) <- unzip <$> traverse (gInclude baseDir) incHeaders
+  (imports, tyMaps) <- unzip <$> traverse (gInclude baseDir) incHeaders
 
-  let map = Map.unions maps
+  let tyMap = Map.unions tyMaps
+  let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) tyMap
+  let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
+        [ H.PragmaLanguage "TypeFamilies, DeriveGeneric"
+        , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing" ]
   pure $
-    H.Module (H.ModuleName $ ns <> extractModuleName inp)
-    [ H.PragmaLanguage "TypeFamilies, DeriveGeneric"
-    , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing" ]
-    (imports ++ defaultImports)
-    (concat $ runReader (traverse gDefinition defs) map)
+    [ -- types
+      mkMod ".Types"
+      (imports ++ defaultImports)
+      (concat typeDecls)
+    , -- client
+      mkMod ".Client"
+      (impTypes : imports ++ defaultImports)
+      (concat clientDecls)
+    , -- server
+      mkMod ".Server"
+      (impTypes : imports ++ defaultImports)
+      (concat serverDecls)
+    ]
 
   where
     ns = fromMaybe "" $ extractNamespace headers
+    modBaseName = ns <> extractModuleName inp
     baseDir = dropFileName inp
     incHeaders = mapMaybe (\x -> case x of
       HeaderInclude i -> Just i
       _ -> Nothing)
       headers
+    impTypes = H.ImportDecl (H.ModuleName $ modBaseName <> ".Types") False H.IEverything
     defaultImports =
       [ H.ImportDecl (H.ModuleName "Prelude") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch") True H.IEverything
@@ -115,11 +130,11 @@ gInclude dir i = do
   let thriftModName = T.pack $ dropExtension $ T.unpack $ includePath i
   pure (H.ImportDecl modName True H.IEverything, Map.singleton thriftModName modName)
 
-gDefinition :: Definition SourcePos -> GenerateM [H.Decl]
+gDefinition :: Definition SourcePos -> GenerateM ([H.Decl], [H.Decl], [H.Decl])
 gDefinition def = case def of
-  ConstDefinition _ -> pure []
-  TypeDefinition ty -> gType ty
-  ServiceDefinition _ -> pure []
+  ConstDefinition _ -> pure ([], [], [])
+  TypeDefinition ty -> (\x -> (x, [], [])) <$> gType ty
+  ServiceDefinition s -> (\(x1, x2) -> ([], x1, x2)) <$> gService s
 
 gType :: Type SourcePos -> GenerateM [H.Decl]
 gType ty = case ty of
@@ -271,9 +286,48 @@ gField prefix (i, f) = do
   let index = fromMaybe i (fieldIdentifier f)
   pure (index, H.Name (prefix <> "_" <> fieldName f), ty', req)
 
+
+gService :: Service SourcePos -> GenerateM ([H.Decl], [H.Decl])
+gService s = do
+  (nms, tys, alts, calls) <- unzip4 <$> traverse gFunction (serviceFunctions s)
+  let serverDecls =
+        [ H.DataDecl serviceTyName [ H.RecConDecl serviceConName $ zip nms tys ] []
+        , H.FunBind
+          [ H.Match (H.Name $ "mkService") [H.PVar $ H.Name "service"]
+            ( H.EApp "Pinch.Service.ThriftService"
+              [ H.ELam [H.Name "m"]
+                (
+                  H.ECase (H.EApp "Pinch.messageName" ["m"]) alts
+                )
+              ]
+            )
+          ]
+        ]
+  pure (calls, serverDecls)
+  where
+    serviceTyName = H.TypeName $ capitalize $ serviceName s
+    serviceConName = H.Name $ capitalize $ serviceName s
+    prefix = decapitalize $ serviceName s
+
+gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Alt, H.Decl)
+gFunction f = do
+  argTys <- traverse (gTypeReference . fieldValueType) (functionParameters f)
+  retType <- maybe (pure tyTuple) gTypeReference (functionReturnType f)
+  let funTy = H.TyLam argTys (H.TyApp tyIO [retType])
+  let call = H.FunBind
+        [ H.Match nm [ H.PVar $ H.Name "msg" ] ("") --  ThriftCall $ Message  (pinch $ struct [ x .= ...])
+        ]
+
+  pure ( nm, funTy, alt, call)
+  where
+    nm = H.Name $ functionName f
+    alt = H.Alt (H.PLit $ H.LString $ functionName f) (H.EApp (H.EVar nm) [ "service", "m" ])
+
 tag = H.TyCon $ H.TypeName "Tag"
 clPinchable = H.ClassName "Pinch.Pinchable"
 clHashable = H.ClassName "Data.Hashable.Hashable"
+tyTuple = H.TyCon $ H.TypeName "()"
+tyIO = H.TyCon $ H.TypeName "Prelude.IO"
 
 decapitalize :: T.Text -> T.Text
 decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.tail s

@@ -60,6 +60,7 @@ data ConDecl
 data Type
   = TyApp Type [Type]
   | TyCon TypeName
+  | TyLam [Type] Type
   deriving (Show)
 
 
@@ -89,6 +90,7 @@ data Exp
   | EDo [Stm]
   | EInfix Name Exp Exp
   | EList [Exp]
+  | ELam [Name] Exp
   deriving (Show)
 
 data Stm
@@ -170,6 +172,7 @@ instance Pretty Type where
   pretty ty = case ty of
     TyApp t1 ts -> parens $ pretty t1 <+> hsep (map pretty ts)
     TyCon t -> pretty t
+    TyLam ts t -> concatWith (surround (space <> "->" <> space)) (map (parens . pretty) ts ++ [pretty t])
 
 instance Pretty Match where
   pretty (Match n ps e) = pretty n <+> hsep (map pretty ps) <+> "=" <+> pretty e
@@ -191,6 +194,7 @@ instance Pretty Exp where
     EDo s -> nest 2 $ vsep $ ["do"] ++ map pretty s
     EInfix op e1 e2 -> hsep [ pretty e1, pretty op, pretty e2]
     EList es -> "[" <+> cList (map pretty es) <+> "]"
+    ELam ps e -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e
 
 instance Pretty Alt where
   pretty (Alt p e) = pretty p <+> "->" <+> pretty e
