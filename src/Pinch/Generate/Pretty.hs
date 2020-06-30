@@ -182,7 +182,7 @@ instance Pretty Exp where
     ETyAnn e ty -> parens $ pretty e <+> "::" <+> pretty ty
     ECase e as -> nest 2 $ vsep $ ["case" <+> pretty e <+> "of"] ++ map pretty as
     EDo s -> nest 2 $ vsep $ ["do"] ++ map pretty s
-    EInfix op e1 e2 -> hsep [ pretty e1, pretty op, pretty e2]
+    EInfix op e1 e2 -> parens $ hsep [ pretty e1, pretty op, pretty e2]
     EList es -> "[" <+> cList (map pretty es) <+> "]"
     ELam ps e -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e
 

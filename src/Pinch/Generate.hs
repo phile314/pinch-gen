@@ -5,12 +5,16 @@ module Pinch.Generate where
 import Language.Thrift.AST as A
 import Language.Thrift.Parser
 import Text.Megaparsec (SourcePos)
+import qualified Text.Megaparsec as P
+import qualified Text.Megaparsec.Pos as Pos
 import qualified Text.Megaparsec.Error as E
 import Control.Exception
 import Data.Void
 import Data.List
 import System.FilePath
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import Data.Text.Encoding
 import qualified Pinch.Generate.Pretty as H
 import Data.Char
 import Data.Maybe
@@ -62,12 +66,15 @@ extractNamespace headers =
 
 loadFile :: FilePath -> IO (Program SourcePos)
 loadFile inp = do
-  thrift <- parseFromFile inp
+  thrift <- parseFromFile' inp
   case thrift of
     Left err -> do
       putStrLn "Could not parse thrift file."
       throwIO $ err
     Right s -> pure s
+
+parseFromFile' :: FilePath -> IO (Either (E.ParseErrorBundle T.Text Void) (Program SourcePos))
+parseFromFile' path = P.runParser thriftIDL path . decodeUtf8 <$> BS.readFile path
 
 
 
@@ -79,7 +86,7 @@ gProgram s inp (Program headers defs) = do
   let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) tyMap
   let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
         [ H.PragmaLanguage "TypeFamilies, DeriveGeneric"
-        , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing" ]
+        , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing -fno-warn-unused-matches" ]
   pure $
     [ -- types
       mkMod ".Types"
@@ -91,12 +98,12 @@ gProgram s inp (Program headers defs) = do
         , H.ImportDecl (H.ModuleName "Pinch.Client") True H.IEverything
         ] ++ imports ++ defaultImports)
       (concat clientDecls)
-    , -- server
+{-    , -- server
       mkMod ".Server"
       ( [ impTypes
         , H.ImportDecl (H.ModuleName "Pinch.Server") True H.IEverything
         ] ++ imports ++ defaultImports)
-      (concat serverDecls)
+      (concat serverDecls)-}
     ]
 
   where
@@ -110,6 +117,8 @@ gProgram s inp (Program headers defs) = do
     impTypes = H.ImportDecl (H.ModuleName $ modBaseName <> ".Types") False H.IEverything
     defaultImports =
       [ H.ImportDecl (H.ModuleName "Prelude") True H.IEverything
+      , H.ImportDecl (H.ModuleName "Control.Applicative") True H.IEverything
+      , H.ImportDecl (H.ModuleName "Control.Exception") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch") True H.IEverything
       , H.ImportDecl (H.ModuleName "Data.Text") True H.IEverything
       , H.ImportDecl (H.ModuleName "Data.ByteString") True H.IEverything
@@ -130,7 +139,7 @@ gInclude :: FilePath -> Include SourcePos -> IO (H.ImportDecl, ModuleMap)
 gInclude dir i = do
   -- TODO handle recursive includes ...
   (Program headers _) <- loadFile (dir </> (T.unpack $ includePath i))
-  let modName = H.ModuleName $ fromMaybe "" (extractNamespace headers) <> extractModuleName (T.unpack $ includePath i)
+  let modName = H.ModuleName $ fromMaybe "" (extractNamespace headers) <> extractModuleName (T.unpack $ includePath i) <> ".Types"
   let thriftModName = T.pack $ dropExtension $ T.unpack $ includePath i
   pure (H.ImportDecl modName True H.IEverything, Map.singleton thriftModName modName)
 
@@ -138,7 +147,7 @@ gDefinition :: Definition SourcePos -> GenerateM ([H.Decl], [H.Decl], [H.Decl])
 gDefinition def = case def of
   ConstDefinition _ -> pure ([], [], [])
   TypeDefinition ty -> (\x -> (x, [], [])) <$> gType ty
-  ServiceDefinition s -> (\(x1, x2) -> ([], x1, x2)) <$> gService s
+  ServiceDefinition s -> gService s
 
 gType :: Type SourcePos -> GenerateM [H.Decl]
 gType ty = case ty of
@@ -168,16 +177,16 @@ gTypeReference ref = case ref of
     xs@(x1:x2:_) -> do
       map <- ask
       case Map.lookup (mconcat $ init xs) map of
-        Nothing -> tyCon ty
-        Just (H.ModuleName n) -> pure $ H.TyCon $ n <> "." <> last xs
-    _ -> tyCon ty
+        Nothing -> tyCon $ capitalize ty
+        Just (H.ModuleName n) -> pure $ H.TyCon $ n <> "." <> capitalize (last xs)
+    _ -> tyCon $ capitalize ty
   ty -> error $ "Unsupported type: " <> show ty
 
   where tyCon = pure . H.TyCon
 
 gEnum :: A.Enum SourcePos -> GenerateM [H.Decl]
 gEnum e = pure
-  [ H.DataDecl tyName cons [ derivingEq, derivingGenerics ]
+  [ H.DataDecl tyName cons [ derivingEq, derivingOrd, derivingGenerics, derivingShow ]
   , H.InstDecl (H.InstHead [] clPinchable (H.TyCon tyName))
     [ H.TypeDecl (H.TyApp tag [ H.TyCon tyName ]) (H.TyCon $ "Pinch.TEnum")
     , H.FunBind pinch'
@@ -227,78 +236,106 @@ gEnumDef (i, ed) =
 
 gStruct :: Struct SourcePos -> GenerateM [H.Decl]
 gStruct s = case structKind s of
-  UnionKind -> undefined -- ++ insts (zip (map ((structName s <>) . fieldName) $ structFields s) $ map (\x -> [x]) structFields s)
-  StructKind -> (++ [hashable]) <$> struct
-  ExceptionKind -> (++ [hashable]) <$>  struct
+  UnionKind -> (++ [hashable]) <$> unionDatatype tyName (structFields s) Nothing
+  StructKind -> (++ [hashable]) <$> structDatatype tyName (structFields s)
+  ExceptionKind -> (++ [hashable, ex]) <$>  structDatatype tyName (structFields s)
   where
     tyName = structName s
     hashable = H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
-    struct = do
-      fields <- traverse (gField $ decapitalize $ structName s) $ zip [1..] $ structFields s
-      let (_, nms, tys, _) = unzip4 fields
-      let conNm = structName s
-      let stag = H.TypeDecl (H.TyApp tag [ H.TyCon tyName ]) (H.TyCon $ "Pinch.TStruct")
-      let pinch = H.FunBind
-            [ H.Match "pinch" [H.PCon conNm $ map H.PVar nms]
-                ( H.EApp "Pinch.struct" [ H.EList $ flip map fields $ \(fId, fNm, fTy, fReq) ->
-                  let
-                     op = if fReq then "Pinch..=" else "Pinch.?="
-                   in H.EInfix op (H.ELit $ H.LInt fId) (H.EVar fNm)
-                ])
-            ]
-      let unpinch = H.FunBind
-            [ H.Match "unpinch" [H.PVar "value"] $
-                foldl'
-                  (\acc (fId, fNm, fTy, fReq) ->
-                    H.EInfix "Prelude.<*>" acc (
-                      H.EInfix (if fReq then "Pinch..:" else "Pinch..:?")
-                        "value"
-                        (H.ELit $  H.LInt fId)
-                    )
-                  )
-                  (H.EApp "Prelude.pure" [ H.EVar $ conNm ] )
-                  fields
-            ]
-      pure $
-        [ H.DataDecl tyName
-          [ H.RecConDecl (structName s) (zip nms tys)
-          ]
-          [ derivingEq, derivingGenerics ]
-          , H.InstDecl (H.InstHead [] clPinchable (H.TyCon tyName)) [ stag, pinch, unpinch ]
+    ex = H.InstDecl (H.InstHead [] clException (H.TyCon tyName)) []
+
+
+structDatatype :: T.Text -> [Field SourcePos] -> GenerateM [H.Decl]
+structDatatype nm fs = do
+  fields <- traverse (gField $ decapitalize $ nm) $ zip [1..] fs
+  let (_, nms, tys, _) = unzip4 fields
+  let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TStruct")
+  let pinch = H.FunBind
+        [ H.Match "pinch" [H.PCon nm $ map H.PVar nms]
+            ( H.EApp "Pinch.struct" [ H.EList $ flip map fields $ \(fId, fNm, fTy, fReq) ->
+              let
+                 op = if fReq then "Pinch..=" else "Pinch.?="
+               in H.EInfix op (H.ELit $ H.LInt fId) (H.EVar fNm)
+            ])
         ]
+  let unpinch = H.FunBind
+        [ H.Match "unpinch" [H.PVar "value"] $
+            foldl'
+              (\acc (fId, fNm, fTy, fReq) ->
+                H.EInfix "Prelude.<*>" acc (
+                  H.EInfix (if fReq then "Pinch..:" else "Pinch..:?")
+                    "value"
+                    (H.ELit $  H.LInt fId)
+                )
+              )
+              (H.EApp "Prelude.pure" [ H.EVar $ nm ] )
+              fields
+        ]
+  pure $
+    [ H.DataDecl nm
+      [ H.RecConDecl nm (zip nms tys)
+      ]
+      [ derivingEq, derivingGenerics, derivingShow ]
+      , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
+    ]
 
-
-{-    insts cons = concat $ for cons \(nm, fields) ->
-      let
-      in
-        [ H.FunBind [
-            H.Match (H.Name "pinch") [H.PCon $ H.Name $ nm $ map (H.PVar . fieldName) fields]
-            ( H.EApp hPinch []
+unionDatatype :: T.Text -> [Field SourcePos] -> Maybe H.Name -> GenerateM [H.Decl]
+unionDatatype nm fs defCon = do
+  fields <- traverse (gField $ nm) $ zip [1..] $ map (\f -> f { fieldRequiredness = Just Required } ) fs
+  let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TUnion")
+  let pinch = H.FunBind $
+        map (\(fId, fNm, _, _) -> 
+          H.Match "pinch" [H.PCon fNm [H.PVar "x"]]
+            ( H.EApp "Pinch.union" [ H.ELit $ H.LInt  fId, "x"]
             )
-          ]
-        , H.FunBind [
-            H.Match (H.Name "unpinch") [
-          ]
-        ]-}
+          
+        ) fields ++ maybeToList (fmap (\c ->
+          H.Match "pinch" [H.PCon (nm <> c) [H.PVar "x"]]
+            ( H.EApp "Pinch.union" [ H.ELit $ H.LInt 0, "x"]
+            )
+        ) defCon)
+  let unpinch = H.FunBind
+        [ H.Match "unpinch" [H.PVar "v"] $
+            foldl'
+              (\acc (fId, fNm, _, _) ->
+                H.EInfix "Control.Applicative.<|>" acc (
+                  H.EInfix "Prelude.<$>"
+                    (H.EVar fNm)
+                    (H.EInfix "Pinch..:" "v" $ H.ELit $ H.LInt fId)
+                )
+              )
+              ( maybe
+                "Control.Applicative.empty"
+                (\c -> H.EInfix "Prelude.<$>" (H.EVar (nm <> c))
+                  (H.EInfix "Pinch..:" "v" $ H.ELit $ H.LInt 0)
+                )
+                defCon
+              )
+              fields
+        ]
+  let cons = map (\(_, nm, ty, _) -> H.ConDecl nm [ ty ]) fields ++ maybeToList ((\n -> H.ConDecl (nm <> n) [H.TyCon "()"]) <$> defCon)
+  pure $
+    [ H.DataDecl nm
+      cons
+      [ derivingEq, derivingGenerics, derivingShow ]
+      , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
+    ]
 
 gField :: T.Text -> (Integer, Field SourcePos) -> GenerateM (Integer, H.Name, H.Type, Bool)
 gField prefix (i, f) = do
-  ty <- gTypeReference (fieldValueType f)
-  let (req, ty') = case fieldRequiredness f of
-        Just Required -> (True, ty)
-        _ -> (False, H.TyApp (H.TyCon $ "Prelude.Maybe") [ ty ])
+  (req, ty) <- gFieldType f
   let index = fromMaybe i (fieldIdentifier f)
-  pure (index, prefix <> "_" <> fieldName f, ty', req)
+  pure (index, prefix <> "_" <> fieldName f, ty, req)
 
 
-gService :: Service SourcePos -> GenerateM ([H.Decl], [H.Decl])
+gService :: Service SourcePos -> GenerateM ([H.Decl], [H.Decl], [H.Decl])
 gService s = do
-  (nms, tys, alts, calls) <- unzip4 <$> traverse gFunction (serviceFunctions s)
+  (nms, tys, alts, calls, tyDecls) <- unzip5 <$> traverse gFunction (serviceFunctions s)
   let serverDecls =
         [ H.DataDecl serviceTyName [ H.RecConDecl serviceConName $ zip nms tys ] []
         , H.FunBind
-          [ H.Match "mkService" [H.PVar "service"]
-            ( H.EApp "Pinch.Server.ThriftService"
+          [ H.Match (prefix <> "_mkServer") [H.PVar "server"]
+            ( H.EApp "Pinch.Server.ThriftServer"
               [ H.ELam ["m"]
                 (
                   H.ECase (H.EApp "Pinch.messageName" ["m"]) alts
@@ -307,43 +344,77 @@ gService s = do
             )
           ]
         ]
-  pure (concat calls, serverDecls)
+  pure (concat tyDecls, concat calls, serverDecls)
   where
     serviceTyName = capitalize $ serviceName s
     serviceConName = capitalize $ serviceName s
     prefix = decapitalize $ serviceName s
 
-gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Alt, [H.Decl])
+gFieldType :: Field SourcePos -> GenerateM (Bool, H.Type)
+gFieldType f = do
+  ty <- gTypeReference (fieldValueType f)
+  case fieldRequiredness f of
+    Just Optional -> pure (False, H.TyApp (H.TyCon $ "Prelude.Maybe") [ ty ])
+    _ -> pure (True, ty)
+
+gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Alt, [H.Decl], [H.Decl])
 gFunction f = do
-  argTys <- traverse (gTypeReference . fieldValueType) (functionParameters f)
+  argTys <- traverse (fmap snd . gFieldType) (functionParameters f)
   retType <- maybe (pure tyTuple) gTypeReference (functionReturnType f)
+
+
+  argDataTy <- structDatatype (capitalize (functionName f) <> "_Args") (functionParameters f)
+  let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
+  (resultDecls, resultDataTy) <- case (functionReturnType f, concat $ maybeToList $ functionExceptions f) of
+    (Nothing, []) -> pure ([], H.TyCon "()")
+    (Just r, []) -> pure ([], retType)
+    _ -> do
+      let dtNm = capitalize (functionName f) <> "_Result"
+      let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
+            [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
+            , H.FunBind (
+               map (\e -> H.Match "toEither" [H.PCon (dtNm <> "_" <> fieldName e) [H.PVar "x"]] (H.EApp "Prelude.Left" [H.EApp "Control.Exception.SomeException" ["x"]])) (concat $ maybeToList $ functionExceptions f)
+               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_success") [H.PVar "x"]] (H.EApp "Prelude.Right" [ "x" ])]
+              )
+            ]
+      dt <- unionDatatype
+        dtNm
+        (maybeToList resultField ++ (concat $ maybeToList $ functionExceptions f))
+        (case functionReturnType f of
+          Nothing -> Just "_success"
+          _ -> Nothing
+        )
+      pure ((thriftResultInst : dt), H.TyCon dtNm)
+
+
   let srvFunTy = H.TyLam argTys (H.TyApp tyIO [retType])
-  let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [retType])
+  let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let callArgs = map (\(i, p) ->
         let
-          op = if fieldRequiredness p == Just Required then ".=" else ".?"
+          op = if fieldRequiredness p == Just Optional then "Pinch.?=" else "Pinch..="
           index = H.ELit $ H.LInt $ fromMaybe i (fieldIdentifier p)
         in H.EInfix op index (H.EVar $ fieldName p)
         ) (zip [1..] $ functionParameters f)
   let call = H.FunBind
         [ H.Match nm ( map (H.PVar . fieldName) $ functionParameters f)
           ( H.EApp "Pinch.Client.ThriftCall"
-            [ H.EApp "Pinch.mkMessage" [ H.ELit $ H.LString nm, "Pinch.Call", H.ELit $ H.LInt 0, H.EApp "Pinch.struct" [ H.EList $ callArgs ] ]
+            [ H.EApp "Pinch.mkMessage" [ H.ELit $ H.LString $ functionName f, "Pinch.Call", H.ELit $ H.LInt 0, H.EApp "Pinch.struct" [ H.EList $ callArgs ] ]
             ]
           )
         ]
 
-  pure ( nm, srvFunTy, alt, [callSig, call])
+  pure ( nm, srvFunTy, alt, [callSig, call], (argDataTy ++ resultDecls))
   where
-    nm = functionName f
-    alt = H.Alt (H.PLit $ H.LString $ functionName f) (H.EApp (H.EVar nm) [ "service", "m" ])
+    nm = decapitalize $ functionName f
+    alt = H.Alt (H.PLit $ H.LString $ functionName f) (H.EApp (H.EVar nm) [ "server", "m" ])
 
 tag = H.TyCon $ "Tag"
 clPinchable = "Pinch.Pinchable"
 clHashable = "Data.Hashable.Hashable"
 tyTuple = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
+clException = "Control.Exception.Exception"
 
 decapitalize :: T.Text -> T.Text
 decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.tail s
@@ -351,5 +422,7 @@ decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.
 capitalize :: T.Text -> T.Text
 capitalize s  = if T.null s then "" else T.singleton (toUpper $ T.head s) <> T.tail s
 
+derivingShow = H.DeriveClass $ H.TyCon $ "Prelude.Show"
 derivingEq = H.DeriveClass $ H.TyCon $ "Prelude.Eq"
+derivingOrd = H.DeriveClass $ H.TyCon $ "Prelude.Ord"
 derivingGenerics = H.DeriveClass $ H.TyCon $ "GHC.Generics.Generic"
