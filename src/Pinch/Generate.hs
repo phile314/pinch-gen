@@ -196,19 +196,25 @@ gTypeReference ref = case ref of
   where tyCon = pure . H.TyCon
 
 gEnum :: A.Enum SourcePos -> GenerateM [H.Decl]
-gEnum e = pure
-  [ H.DataDecl tyName cons [ derivingEq, derivingOrd, derivingGenerics, derivingShow ]
-  , H.InstDecl (H.InstHead [] clPinchable (H.TyCon tyName))
-    [ H.TypeDecl (H.TyApp tag [ H.TyCon tyName ]) (H.TyCon $ "Pinch.TEnum")
-    , H.FunBind pinch'
-    , H.FunBind [unpinch']
-    ]
-  , H.InstDecl (H.InstHead [] "Prelude.Enum" (H.TyCon tyName))
-    [ H.FunBind fromEnum'
-    , H.FunBind (toEnum' ++ [toEnumDef])
-    ]
-  , H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
-  ]
+gEnum e = do
+  settings <- asks cSettings
+  pure (
+    [ H.DataDecl tyName cons [ derivingEq, derivingOrd, derivingGenerics, derivingShow ]
+    , H.InstDecl (H.InstHead [] clPinchable (H.TyCon tyName))
+      [ H.TypeDecl (H.TyApp tag [ H.TyCon tyName ]) (H.TyCon $ "Pinch.TEnum")
+      , H.FunBind pinch'
+      , H.FunBind [unpinch']
+      ]
+    , H.InstDecl (H.InstHead [] "Prelude.Enum" (H.TyCon tyName))
+      [ H.FunBind fromEnum'
+      , H.FunBind (toEnum' ++ [toEnumDef])
+      ]
+    , H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
+    ] ++ if sGenerateArbitrary settings then [
+      H.InstDecl (H.InstHead [] clArbitrary (H.TyCon tyName)) [
+        H.FunBind [ arbitrary ]
+      ]
+    ] else [])
   where
     tyName = enumName e
     unpinch = H.Match "unpinch" [H.PVar "x"]
@@ -228,6 +234,9 @@ gEnum e = pure
         [ H.StmBind (Just $ H.PVar "val") (H.EApp "Pinch.unpinch" ["v"])
         , H.StmBind Nothing (H.ECase (H.ETyAnn "val" (H.TyCon $ "Data.Int.Int32")) (unpinchAlts' ++ [defAlt]) )
         ]
+      )
+    arbitrary = H.Match "arbitrary" [] (
+      H.EInfix "Prelude.toEnum" "Prelude.<$>" "Test.QuickCheck.arbitrary"
       )
 
 gEnumDef :: (Integer, EnumDef SourcePos) -> (H.ConDecl, H.Match, H.Match, H.Match, H.Alt)
