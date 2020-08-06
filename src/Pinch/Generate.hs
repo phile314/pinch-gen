@@ -29,7 +29,8 @@ data Settings
   = Settings
   { sHashableVectorInstanceModule :: T.Text
   , sGenerateArbitrary :: Bool
-  }
+  , sExtraImports :: [T.Text]
+  } deriving (Show)
 
 generate :: Settings -> FilePath -> FilePath -> IO ()
 generate s inp out = do
@@ -91,9 +92,10 @@ gProgram s inp (Program headers defs) = do
   pure $
     [ -- types
       mkMod ".Types"
-      (imports ++ defaultImports ++ if sGenerateArbitrary s then [
-        H.ImportDecl (H.ModuleName "Test.QuickCheck") True H.IEverything
-      ] else [])
+      (imports ++ defaultImports ++ map
+        (\n -> H.ImportDecl (H.ModuleName n) True H.IEverything)
+        (sExtraImports s ++ if sGenerateArbitrary s then [ "Test.QuickCheck" ] else [])
+      )
       (concat typeDecls)
     , -- client
       mkMod ".Client"
