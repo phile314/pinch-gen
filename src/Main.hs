@@ -12,6 +12,7 @@ data Options = Options
   { inputFile :: FilePath
   , outputDir :: FilePath
   , hashableVectorInstanceModule :: T.Text
+  , generateArbitrary :: Bool
   }
   deriving (Show)
 
@@ -21,12 +22,13 @@ pOptions = Options
   <$> strOption (long "in" <> metavar "IN_FILE" <> help "Thrift input file")
   <*> strOption (long "out" <> metavar "OUT_DIR" <> help "Output folder")
   <*> strOption (long "hashable-vec-mod" <> help "Module containing hashable instances for vector")
+  <*> flag True False (long "--no-generate-arbitrary")
 
 main :: IO ()
 main = do
   opts <- execParser pOpts
 
-  generate (Settings $ hashableVectorInstanceModule opts) (inputFile opts) (outputDir opts)
+  generate (Settings (hashableVectorInstanceModule opts) (generateArbitrary opts)) (inputFile opts) (outputDir opts)
 
   where
     pOpts = info (pOptions <**> helper)

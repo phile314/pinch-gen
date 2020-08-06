@@ -28,6 +28,7 @@ import System.IO
 data Settings
   = Settings
   { sHashableVectorInstanceModule :: T.Text
+  , sGenerateArbitrary :: Bool
   }
 
 generate :: Settings -> FilePath -> FilePath -> IO ()
@@ -83,14 +84,16 @@ gProgram s inp (Program headers defs) = do
   (imports, tyMaps) <- unzip <$> traverse (gInclude baseDir) incHeaders
 
   let tyMap = Map.unions tyMaps
-  let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) tyMap
+  let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) $ Context tyMap s
   let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
         [ H.PragmaLanguage "TypeFamilies, DeriveGeneric"
         , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing -fno-warn-unused-matches" ]
   pure $
     [ -- types
       mkMod ".Types"
-      (imports ++ defaultImports)
+      (imports ++ defaultImports ++ if sGenerateArbitrary s then [
+        H.ImportDecl (H.ModuleName "Test.QuickCheck") True H.IEverything
+      ] else [])
       (concat typeDecls)
     , -- client
       mkMod ".Client"
@@ -133,7 +136,13 @@ gProgram s inp (Program headers defs) = do
 
 type ModuleMap = Map.HashMap T.Text H.ModuleName
 
-type GenerateM = Reader ModuleMap
+data Context
+  = Context
+  { cModuleMap :: ModuleMap
+  , cSettings :: Settings
+  }
+
+type GenerateM = Reader Context
 
 gInclude :: FilePath -> Include SourcePos -> IO (H.ImportDecl, ModuleMap)
 gInclude dir i = do
@@ -175,7 +184,7 @@ gTypeReference ref = case ref of
   SetType ty _ _ -> H.TyApp (H.TyCon $ "Data.HashSet.HashSet") <$> traverse gTypeReference [ty]
   DefinedType ty _ -> case T.splitOn "." ty of
     xs@(x1:x2:_) -> do
-      map <- ask
+      map <- asks cModuleMap
       case Map.lookup (mconcat $ init xs) map of
         Nothing -> tyCon $ capitalize ty
         Just (H.ModuleName n) -> pure $ H.TyCon $ n <> "." <> capitalize (last xs)
@@ -271,13 +280,28 @@ structDatatype nm fs = do
               (H.EApp "Prelude.pure" [ H.EVar $ nm ] )
               fields
         ]
+  let arbitrary = H.FunBind
+        [ H.Match "arbitrary" [] $
+            foldl'
+              (\acc _ ->
+                H.EInfix "Prelude.<*>" acc (
+                  "Test.QuickCheck.arbitrary"
+                )
+              )
+              (H.EApp "Prelude.pure" [ H.EVar $ nm ] )
+              fields
+        ]
+
+  settings <- asks cSettings
   pure $
     [ H.DataDecl nm
       [ H.RecConDecl nm (zip nms tys)
       ]
       [ derivingEq, derivingGenerics, derivingShow ]
-      , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
-    ]
+    , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
+    ] ++ (if sGenerateArbitrary settings then [
+      H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
+    ] else [])
 
 unionDatatype :: T.Text -> [Field SourcePos] -> Maybe H.Name -> GenerateM [H.Decl]
 unionDatatype nm fs defCon = do
@@ -415,6 +439,7 @@ clHashable = "Data.Hashable.Hashable"
 tyTuple = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
 clException = "Control.Exception.Exception"
+clArbitrary = "Test.QuickCheck.Arbitrary"
 
 decapitalize :: T.Text -> T.Text
 decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.tail s
