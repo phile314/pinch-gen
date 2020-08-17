@@ -236,7 +236,7 @@ gEnum e = do
         ]
       )
     arbitrary = H.Match "arbitrary" [] (
-      H.EInfix "Prelude.toEnum" "Prelude.<$>" "Test.QuickCheck.arbitrary"
+      H.EInfix "Prelude.<$>" "Prelude.toEnum" "Test.QuickCheck.arbitrary"
       )
 
 gEnumDef :: (Integer, EnumDef SourcePos) -> (H.ConDecl, H.Match, H.Match, H.Match, H.Alt)
@@ -302,7 +302,6 @@ structDatatype nm fs = do
               (H.EApp "Prelude.pure" [ H.EVar $ nm ] )
               fields
         ]
-
   settings <- asks cSettings
   pure $
     [ H.DataDecl nm
@@ -349,12 +348,26 @@ unionDatatype nm fs defCon = do
               fields
         ]
   let cons = map (\(_, nm, ty, _) -> H.ConDecl nm [ ty ]) fields ++ maybeToList ((\n -> H.ConDecl (nm <> n) [H.TyCon "()"]) <$> defCon)
+  let arbitrary = H.FunBind
+        [ H.Match "arbitrary" [] $
+            H.EApp "Test.QuickCheck.oneof"
+            [ H.EList $
+              map
+                (\(_, nm, _, _) ->
+                  H.EInfix "Prelude.<$>" (H.EVar nm) "Test.QuickCheck.arbitrary"
+                )
+                fields
+            ]
+        ]
+  settings <- asks cSettings
   pure $
     [ H.DataDecl nm
       cons
       [ derivingEq, derivingGenerics, derivingShow ]
       , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
-    ]
+    ] ++ (if sGenerateArbitrary settings then [
+      H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
+    ] else [])
 
 gField :: T.Text -> (Integer, Field SourcePos) -> GenerateM (Integer, H.Name, H.Type, Bool)
 gField prefix (i, f) = do
