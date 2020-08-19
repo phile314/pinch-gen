@@ -415,7 +415,6 @@ gFunction f = do
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
   (resultDecls, resultDataTy) <- case (functionReturnType f, concat $ maybeToList $ functionExceptions f) of
     (Nothing, []) -> pure ([], H.TyCon "()")
-    (Just r, []) -> pure ([], retType)
     _ -> do
       let dtNm = capitalize (functionName f) <> "_Result"
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
