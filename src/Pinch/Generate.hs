@@ -8,6 +8,7 @@ import Text.Megaparsec (SourcePos)
 import qualified Text.Megaparsec as P
 import qualified Text.Megaparsec.Pos as Pos
 import qualified Text.Megaparsec.Error as E
+import Control.Applicative
 import Control.Exception
 import Data.Void
 import Data.List
@@ -256,7 +257,7 @@ gEnumDef (i, ed) =
 
 gStruct :: Struct SourcePos -> GenerateM [H.Decl]
 gStruct s = case structKind s of
-  UnionKind -> (++ [hashable]) <$> unionDatatype tyName (structFields s) Nothing
+  UnionKind -> (++ [hashable]) <$> unionDatatype tyName (structFields s) SRCNone
   StructKind -> (++ [hashable]) <$> structDatatype tyName (structFields s)
   ExceptionKind -> (++ [hashable, ex]) <$>  structDatatype tyName (structFields s)
   where
@@ -313,7 +314,9 @@ structDatatype nm fs = do
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
     ] else [])
 
-unionDatatype :: T.Text -> [Field SourcePos] -> Maybe H.Name -> GenerateM [H.Decl]
+data ServiceResultCon = SRCNone | SRCVoid H.Name
+
+unionDatatype :: T.Text -> [Field SourcePos] -> ServiceResultCon -> GenerateM [H.Decl]
 unionDatatype nm fs defCon = do
   fields <- traverse (gField $ nm) $ zip [1..] $ map (\f -> f { fieldRequiredness = Just Required } ) fs
   let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TUnion")
@@ -323,11 +326,13 @@ unionDatatype nm fs defCon = do
             ( H.EApp "Pinch.union" [ H.ELit $ H.LInt  fId, "x"]
             )
           
-        ) fields ++ maybeToList (fmap (\c ->
-          H.Match "pinch" [H.PCon (nm <> c) [H.PVar "x"]]
-            ( H.EApp "Pinch.union" [ H.ELit $ H.LInt 0, "x"]
-            )
-        ) defCon)
+        ) fields ++ case defCon of
+          SRCNone -> []
+          SRCVoid c ->
+            [ H.Match "pinch" [H.PCon (nm <> c) []]
+              ( H.EApp "Pinch.pinch" [ "Pinch.Unit" ]
+              )
+            ]
   let unpinch = H.FunBind
         [ H.Match "unpinch" [H.PVar "v"] $
             foldl'
@@ -338,16 +343,17 @@ unionDatatype nm fs defCon = do
                     (H.EInfix "Pinch..:" "v" $ H.ELit $ H.LInt fId)
                 )
               )
-              ( maybe
-                "Control.Applicative.empty"
-                (\c -> H.EInfix "Prelude.<$>" (H.EVar (nm <> c))
-                  (H.EInfix "Pinch..:" "v" $ H.ELit $ H.LInt 0)
-                )
-                defCon
+              ( case defCon of
+                  SRCNone -> "Control.Applicative.empty"
+                  SRCVoid c ->
+                    H.EInfix "Prelude.<$" (H.EVar (nm <> c))
+                      "(Pinch.unpinch v :: Pinch.Parser Pinch.Unit)"
               )
               fields
         ]
-  let cons = map (\(_, nm, ty, _) -> H.ConDecl nm [ ty ]) fields ++ maybeToList ((\n -> H.ConDecl (nm <> n) [H.TyCon "()"]) <$> defCon)
+  let cons = map (\(_, nm, ty, _) -> H.ConDecl nm [ ty ]) fields ++ case defCon of
+        SRCNone -> []
+        SRCVoid c -> [H.ConDecl (nm <> c) []]
   let arbitrary = H.FunBind
         [ H.Match "arbitrary" [] $
             H.EApp "Test.QuickCheck.oneof"
@@ -414,22 +420,22 @@ gFunction f = do
   argDataTy <- structDatatype (capitalize (functionName f) <> "_Args") (functionParameters f)
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
   (resultDecls, resultDataTy) <- case (functionReturnType f, concat $ maybeToList $ functionExceptions f) of
-    (Nothing, []) -> pure ([], H.TyCon "()")
+    (Nothing, []) -> pure ([], H.TyCon "Pinch.Unit")
     _ -> do
       let dtNm = capitalize (functionName f) <> "_Result"
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
             , H.FunBind (
                map (\e -> H.Match "toEither" [H.PCon (dtNm <> "_" <> fieldName e) [H.PVar "x"]] (H.EApp "Prelude.Left" [H.EApp "Control.Exception.SomeException" ["x"]])) (concat $ maybeToList $ functionExceptions f)
-               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_success") [H.PVar "x"]] (H.EApp "Prelude.Right" [ "x" ])]
+               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_success") (const (H.PVar "x") <$> maybeToList (functionReturnType f))] (H.EApp "Prelude.Right" (maybeToList $ ("x" <$ functionReturnType f) <|> pure "()"))]
               )
             ]
       dt <- unionDatatype
         dtNm
         (maybeToList resultField ++ (concat $ maybeToList $ functionExceptions f))
         (case functionReturnType f of
-          Nothing -> Just "_success"
-          _ -> Nothing
+          Nothing -> SRCVoid "_success"
+          _ -> SRCNone
         )
       pure ((thriftResultInst : dt), H.TyCon dtNm)
 
