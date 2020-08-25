@@ -441,6 +441,12 @@ gFunction f = do
                 ]
                 )
               ]
+            , H.FunBind [H.Match "success" [H.PVar "x"]
+                (case functionReturnType f of
+                  Just _ -> H.EApp (H.EVar $ dtNm <> "_Success") ["x"]
+                  Nothing -> H.EVar $ dtNm <> "_Success"
+                )
+              ]
             ]
       dt <- unionDatatype
         dtNm
