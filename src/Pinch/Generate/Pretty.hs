@@ -120,12 +120,12 @@ instance Pretty Pragma where
     PragmaOptsGhc o -> "{-# OPTIONS_GHC" <+> pretty o <+> "#-}"
 
 instance Pretty ImportDecl where
-  pretty i = "import" <+> (if (iQualified i) then "qualified" else "") <+> pretty (iName i) <+> pretty (iThings i)
+  pretty i = "import" <+> (if (iQualified i) then "qualified" else "") <+> pretty (iName i) <> pretty (iThings i)
 
 instance Pretty ImportNames where
   pretty i = case i of
     IEverything -> ""
-    IJust xs -> parens $ cList $ map pretty xs
+    IJust xs -> " " <> (parens $ cList $ map pretty xs)
 
 instance Pretty Decl where
   pretty decl = case decl of

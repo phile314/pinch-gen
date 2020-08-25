@@ -104,12 +104,12 @@ gProgram s inp (Program headers defs) = do
         , H.ImportDecl (H.ModuleName "Pinch.Client") True H.IEverything
         ] ++ imports ++ defaultImports)
       (concat clientDecls)
-{-    , -- server
+    , -- server
       mkMod ".Server"
       ( [ impTypes
         , H.ImportDecl (H.ModuleName "Pinch.Server") True H.IEverything
         ] ++ imports ++ defaultImports)
-      (concat serverDecls)-}
+      (concat serverDecls)
     ]
 
   where
@@ -126,6 +126,8 @@ gProgram s inp (Program headers defs) = do
       , H.ImportDecl (H.ModuleName "Control.Applicative") True H.IEverything
       , H.ImportDecl (H.ModuleName "Control.Exception") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch") True H.IEverything
+      , H.ImportDecl (H.ModuleName "Pinch.Server") True H.IEverything
+      , H.ImportDecl (H.ModuleName "Pinch.Internal.RPC") True H.IEverything
       , H.ImportDecl (H.ModuleName "Data.Text") True H.IEverything
       , H.ImportDecl (H.ModuleName "Data.ByteString") True H.IEverything
       , H.ImportDecl (H.ModuleName "Data.Int") True H.IEverything
@@ -318,7 +320,7 @@ data ServiceResultCon = SRCNone | SRCVoid H.Name
 
 unionDatatype :: T.Text -> [Field SourcePos] -> ServiceResultCon -> GenerateM [H.Decl]
 unionDatatype nm fs defCon = do
-  fields <- traverse (gField $ nm) $ zip [1..] $ map (\f -> f { fieldRequiredness = Just Required } ) fs
+  fields <- traverse (gField $ nm) $ zip [1..] $ map (\f -> f { fieldRequiredness = Just Required, fieldName = capitalize (fieldName f) } ) fs
   let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TUnion")
   let pinch = H.FunBind $
         map (\(fId, fNm, _, _) -> 
@@ -387,12 +389,15 @@ gService s = do
   (nms, tys, alts, calls, tyDecls) <- unzip5 <$> traverse gFunction (serviceFunctions s)
   let serverDecls =
         [ H.DataDecl serviceTyName [ H.RecConDecl serviceConName $ zip nms tys ] []
+        , H.TypeSigDecl (prefix <> "_mkServer") (H.TyLam [H.TyCon serviceConName] (H.TyCon "Pinch.Server.ThriftServer"))
         , H.FunBind
           [ H.Match (prefix <> "_mkServer") [H.PVar "server"]
             ( H.EApp "Pinch.Server.ThriftServer"
-              [ H.ELam ["m"]
+              [ H.ELam ["ctx", "m"]
                 (
-                  H.ECase (H.EApp "Pinch.messageName" ["m"]) alts
+                  H.ECase (H.EApp "Pinch.messageName" ["m"]) (alts ++ [
+                    H.Alt (H.PVar "_") (H.EApp "Prelude.pure" [H.EApp "Pinch.Server.unknownMethodError" ["m"]])
+                  ])
                 )
               ]
             )
@@ -417,30 +422,37 @@ gFunction f = do
   retType <- maybe (pure tyTuple) gTypeReference (functionReturnType f)
 
 
-  argDataTy <- structDatatype (capitalize (functionName f) <> "_Args") (functionParameters f)
+  argDataTy <- structDatatype argDataTyNm (functionParameters f)
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
-  (resultDecls, resultDataTy) <- case (functionReturnType f, concat $ maybeToList $ functionExceptions f) of
+  (resultDecls, resultDataTy) <- case (functionReturnType f, exceptions) of
     (Nothing, []) -> pure ([], H.TyCon "Pinch.Unit")
     _ -> do
-      let dtNm = capitalize (functionName f) <> "_Result"
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
             , H.FunBind (
-               map (\e -> H.Match "toEither" [H.PCon (dtNm <> "_" <> fieldName e) [H.PVar "x"]] (H.EApp "Prelude.Left" [H.EApp "Control.Exception.SomeException" ["x"]])) (concat $ maybeToList $ functionExceptions f)
-               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_success") (const (H.PVar "x") <$> maybeToList (functionReturnType f))] (H.EApp "Prelude.Right" (maybeToList $ ("x" <$ functionReturnType f) <|> pure "()"))]
+               map (\e -> H.Match "toEither" [H.PCon (dtNm <> "_" <> capitalize (fieldName e)) [H.PVar "x"]] (H.EApp "Prelude.Left" [H.EApp "Control.Exception.SomeException" ["x"]])) exceptions
+               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_Success") (const (H.PVar "x") <$> maybeToList (functionReturnType f))] (H.EApp "Prelude.Right" (maybeToList $ ("x" <$ functionReturnType f) <|> pure "()"))]
               )
+            , H.FunBind [H.Match "wrapException" [] (
+                H.EApp "Pinch.Internal.RPC.wrapExceptions" [
+                  H.EList (map (\e ->
+                    H.EApp "Pinch.Internal.RPC.Wrapper" [(H.EVar $ dtNm <> "_" <> capitalize (fieldName e))]
+                  ) exceptions)
+                ]
+                )
+              ]
             ]
       dt <- unionDatatype
         dtNm
-        (maybeToList resultField ++ (concat $ maybeToList $ functionExceptions f))
+        (maybeToList resultField ++ exceptions)
         (case functionReturnType f of
-          Nothing -> SRCVoid "_success"
+          Nothing -> SRCVoid "_Success"
           _ -> SRCNone
         )
       pure ((thriftResultInst : dt), H.TyCon dtNm)
 
 
-  let srvFunTy = H.TyLam argTys (H.TyApp tyIO [retType])
+  let srvFunTy = H.TyLam [H.TyCon "Pinch.Server.Context", H.TyCon argDataTyNm] (H.TyApp tyIO [resultDataTy])
   let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let callArgs = map (\(i, p) ->
@@ -460,7 +472,13 @@ gFunction f = do
   pure ( nm, srvFunTy, alt, [callSig, call], (argDataTy ++ resultDecls))
   where
     nm = decapitalize $ functionName f
-    alt = H.Alt (H.PLit $ H.LString $ functionName f) (H.EApp (H.EVar nm) [ "server", "m" ])
+    dtNm = capitalize (functionName f) <> "_Result"
+    alt = H.Alt (H.PLit $ H.LString $ functionName f)
+      (H.EApp "Pinch.Server.runServiceMethod"
+        [ H.EApp (H.EVar nm) [ "server", "ctx" ], "m" ]
+      )
+    argDataTyNm = capitalize $ functionName f <> "_Args"
+    exceptions = concat $ maybeToList $ functionExceptions f
 
 tag = H.TyCon $ "Tag"
 clPinchable = "Pinch.Pinchable"
