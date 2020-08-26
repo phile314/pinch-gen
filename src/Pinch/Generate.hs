@@ -239,7 +239,7 @@ gEnum e = do
         ]
       )
     arbitrary = H.Match "arbitrary" [] (
-      H.EInfix "Prelude.<$>" "Prelude.toEnum" "Test.QuickCheck.arbitrary"
+        H.EApp "Test.QuickCheck.elements" [H.EList $ map (H.EVar . enumDefName) $ enumValues e]
       )
 
 gEnumDef :: (Integer, EnumDef SourcePos) -> (H.ConDecl, H.Match, H.Match, H.Match, H.Alt)
