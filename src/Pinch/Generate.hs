@@ -202,7 +202,7 @@ gEnum :: A.Enum SourcePos -> GenerateM [H.Decl]
 gEnum e = do
   settings <- asks cSettings
   pure (
-    [ H.DataDecl tyName cons [ derivingEq, derivingOrd, derivingGenerics, derivingShow ]
+    [ H.DataDecl tyName cons [ derivingEq, derivingOrd, derivingGenerics, derivingShow, derivingBounded ]
     , H.InstDecl (H.InstHead [] clPinchable (H.TyCon tyName))
       [ H.TypeDecl (H.TyApp tag [ H.TyCon tyName ]) (H.TyCon $ "Pinch.TEnum")
       , H.FunBind pinch'
@@ -504,3 +504,4 @@ derivingShow = H.DeriveClass $ H.TyCon $ "Prelude.Show"
 derivingEq = H.DeriveClass $ H.TyCon $ "Prelude.Eq"
 derivingOrd = H.DeriveClass $ H.TyCon $ "Prelude.Ord"
 derivingGenerics = H.DeriveClass $ H.TyCon $ "GHC.Generics.Generic"
+derivingBounded = H.DeriveClass $ H.TyCon $ "Prelude.Bounded"
