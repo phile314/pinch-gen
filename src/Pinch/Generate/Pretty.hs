@@ -1,11 +1,11 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Pinch.Generate.Pretty where
 
-import Data.String
-import qualified Data.Text as T
-import Data.Text.Prettyprint.Doc
+import           Data.String
+import qualified Data.Text                 as T
+import           Data.Text.Prettyprint.Doc
 
 newtype ModuleName = ModuleName T.Text
   deriving (Show)
@@ -14,10 +14,10 @@ type Name = T.Text
 type ClassName = T.Text
 
 data Module = Module
-  { modName :: ModuleName
+  { modName    :: ModuleName
   , modPragmas :: [Pragma]
   , modImports :: [ImportDecl]
-  , modDecls :: [Decl]
+  , modDecls   :: [Decl]
   }
   deriving (Show)
 
@@ -27,9 +27,9 @@ data Pragma
   deriving (Show)
 
 data ImportDecl = ImportDecl
-  { iName :: ModuleName
+  { iName      :: ModuleName
   , iQualified :: Bool
-  , iThings :: ImportNames
+  , iThings    :: ImportNames
   }
   deriving (Show)
 

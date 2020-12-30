@@ -2,35 +2,35 @@
 
 module Pinch.Generate where
 
-import Language.Thrift.AST as A
-import Language.Thrift.Parser
-import Text.Megaparsec (SourcePos)
-import qualified Text.Megaparsec as P
-import qualified Text.Megaparsec.Pos as Pos
-import qualified Text.Megaparsec.Error as E
-import Control.Applicative
-import Control.Exception
-import Data.Void
-import Data.List
-import System.FilePath
-import qualified Data.ByteString as BS
-import qualified Data.Text as T
-import Data.Text.Encoding
-import qualified Pinch.Generate.Pretty as H
-import Data.Char
-import Data.Maybe
-import qualified Data.HashMap.Strict as Map
-import Control.Monad.Reader
-import Data.Text.Prettyprint.Doc
-import Data.Text.Prettyprint.Doc.Render.Text
-import System.Directory
-import System.IO
+import           Control.Applicative
+import           Control.Exception
+import           Control.Monad.Reader
+import qualified Data.ByteString                       as BS
+import           Data.Char
+import qualified Data.HashMap.Strict                   as Map
+import           Data.List
+import           Data.Maybe
+import qualified Data.Text                             as T
+import           Data.Text.Encoding
+import           Data.Text.Prettyprint.Doc
+import           Data.Text.Prettyprint.Doc.Render.Text
+import           Data.Void
+import           Language.Thrift.AST                   as A
+import           Language.Thrift.Parser
+import qualified Pinch.Generate.Pretty                 as H
+import           System.Directory
+import           System.FilePath
+import           System.IO
+import           Text.Megaparsec                       (SourcePos)
+import qualified Text.Megaparsec                       as P
+import qualified Text.Megaparsec.Error                 as E
+import qualified Text.Megaparsec.Pos                   as Pos
 
 data Settings
   = Settings
   { sHashableVectorInstanceModule :: T.Text
-  , sGenerateArbitrary :: Bool
-  , sExtraImports :: [T.Text]
+  , sGenerateArbitrary            :: Bool
+  , sExtraImports                 :: [T.Text]
   } deriving (Show)
 
 generate :: Settings -> FilePath -> FilePath -> IO ()
@@ -144,7 +144,7 @@ type ModuleMap = Map.HashMap T.Text H.ModuleName
 data Context
   = Context
   { cModuleMap :: ModuleMap
-  , cSettings :: Settings
+  , cSettings  :: Settings
   }
 
 type GenerateM = Reader Context
@@ -248,7 +248,7 @@ gEnumDef (i, ed) =
   , H.Match "fromEnum" [H.PCon conName []] (H.ELit $ H.LInt index)
   , H.Match "toEnum" [H.PLit $ H.LInt index] (H.EVar conName)
   , H.Match "pinch" [H.PCon conName []]
-    ( H.EApp "Pinch.pinch" 
+    ( H.EApp "Pinch.pinch"
       [ H.ETyAnn (H.ELit $ H.LInt index) (H.TyCon $ "Data.Int.Int32") ]
     )
   , H.Alt (H.PLit $ H.LInt index) (H.EApp "Prelude.pure" [ H.EVar conName ])
@@ -323,11 +323,11 @@ unionDatatype nm fs defCon = do
   fields <- traverse (gField $ nm) $ zip [1..] $ map (\f -> f { fieldRequiredness = Just Required, fieldName = capitalize (fieldName f) } ) fs
   let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TUnion")
   let pinch = H.FunBind $
-        map (\(fId, fNm, _, _) -> 
+        map (\(fId, fNm, _, _) ->
           H.Match "pinch" [H.PCon fNm [H.PVar "x"]]
             ( H.EApp "Pinch.union" [ H.ELit $ H.LInt  fId, "x"]
             )
-          
+
         ) fields ++ case defCon of
           SRCNone -> []
           SRCVoid c ->

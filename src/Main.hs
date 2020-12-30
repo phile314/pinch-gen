@@ -5,12 +5,12 @@ import Options.Applicative
 
 import Pinch.Generate
 
+import Data.Text       as T
 import System.FilePath
-import Data.Text as T
 
 data Options = Options
-  { inputFile :: FilePath
-  , outputDir :: FilePath
+  { inputFile   :: FilePath
+  , outputDir   :: FilePath
   , genSettings :: Settings
   }
   deriving (Show)
