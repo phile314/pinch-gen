@@ -419,7 +419,7 @@ gFieldType f = do
 gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Alt, [H.Decl], [H.Decl])
 gFunction f = do
   argTys <- traverse (fmap snd . gFieldType) (functionParameters f)
-  retType <- maybe (pure tyTuple) gTypeReference (functionReturnType f)
+  retType <- maybe (pure tyUnit) gTypeReference (functionReturnType f)
 
 
   argDataTy <- structDatatype argDataTyNm (functionParameters f)
@@ -441,12 +441,6 @@ gFunction f = do
                 ]
                 )
               ]
-            , H.FunBind [H.Match "success" [H.PVar "x"]
-                (case functionReturnType f of
-                  Just _ -> H.EApp (H.EVar $ dtNm <> "_Success") ["x"]
-                  Nothing -> H.EVar $ dtNm <> "_Success"
-                )
-              ]
             ]
       dt <- unionDatatype
         dtNm
@@ -458,7 +452,7 @@ gFunction f = do
       pure ((thriftResultInst : dt), H.TyCon dtNm)
 
 
-  let srvFunTy = H.TyLam [H.TyCon "Pinch.Server.Context", H.TyCon argDataTyNm] (H.TyApp tyIO [resultDataTy])
+  let srvFunTy = H.TyLam [H.TyCon "Pinch.Server.Context", H.TyCon argDataTyNm] (H.TyApp tyIO [retType])
   let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let callArgs = map (\(i, p) ->
@@ -481,7 +475,7 @@ gFunction f = do
     dtNm = capitalize (functionName f) <> "_Result"
     alt = H.Alt (H.PLit $ H.LString $ functionName f)
       (H.EApp "Pinch.Server.runServiceMethod"
-        [ H.EApp (H.EVar nm) [ "server", "ctx" ], "m" ]
+        [ H.EInfix "Prelude.<$>" (H.EVar $ dtNm <> "_Success") (H.EApp (H.EVar nm) [ "server", "ctx", "m" ] ) ]
       )
     argDataTyNm = capitalize $ functionName f <> "_Args"
     exceptions = concat $ maybeToList $ functionExceptions f
@@ -489,7 +483,7 @@ gFunction f = do
 tag = H.TyCon $ "Tag"
 clPinchable = "Pinch.Pinchable"
 clHashable = "Data.Hashable.Hashable"
-tyTuple = H.TyCon $ "()"
+tyUnit = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
 clException = "Control.Exception.Exception"
 clArbitrary = "Test.QuickCheck.Arbitrary"
