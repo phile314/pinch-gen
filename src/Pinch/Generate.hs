@@ -424,8 +424,8 @@ gFunction f = do
 
   argDataTy <- structDatatype argDataTyNm (functionParameters f)
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
-  (resultDecls, resultDataTy) <- case (functionReturnType f, exceptions) of
-    (Nothing, []) -> pure ([], H.TyCon "Pinch.Unit")
+  (resultDecls, resultDataTy, resultDataCon) <- case (functionReturnType f, exceptions) of
+    (Nothing, []) -> pure ([], H.TyCon "Pinch.Unit", "Pinch.Unit")
     _ -> do
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
@@ -449,10 +449,10 @@ gFunction f = do
           Nothing -> SRCVoid "_Success"
           _ -> SRCNone
         )
-      pure ((thriftResultInst : dt), H.TyCon dtNm)
+      pure ((thriftResultInst : dt), H.TyCon dtNm, H.EVar $ dtNm <> "_Success")
 
 
-  let srvFunTy = H.TyLam [H.TyCon "Pinch.Server.Context", H.TyCon argDataTyNm] (H.TyApp tyIO [retType])
+  let srvFunTy = H.TyLam ([H.TyCon "Pinch.Server.Context"] ++ argTys) (H.TyApp tyIO [retType])
   let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let callArgs = map (\(i, p) ->
@@ -468,15 +468,23 @@ gFunction f = do
             ]
           )
         ]
+  let alt = H.Alt (H.PLit $ H.LString $ functionName f)
+        (H.EApp "Pinch.Server.runServiceMethod"
+          [ H.ELam [ H.PCon argDataTyNm (map H.PVar argVars) ]
+            ( H.EInfix (if isNothing (functionReturnType f) then "Prelude.<$" else "Prelude.<$>")
+                resultDataCon
+                (H.EApp (H.EVar nm)
+                (["server", "ctx" ] ++ map H.EVar argVars) )
+            )
+          , "m"
+          ]
+        )
 
   pure ( nm, srvFunTy, alt, [callSig, call], (argDataTy ++ resultDecls))
   where
     nm = decapitalize $ functionName f
     dtNm = capitalize (functionName f) <> "_Result"
-    alt = H.Alt (H.PLit $ H.LString $ functionName f)
-      (H.EApp "Pinch.Server.runServiceMethod"
-        [ H.EInfix "Prelude.<$>" (H.EVar $ dtNm <> "_Success") (H.EApp (H.EVar nm) [ "server", "ctx", "m" ] ) ]
-      )
+    argVars = take (length $ functionParameters f) $ map T.singleton ['a'..]
     argDataTyNm = capitalize $ functionName f <> "_Args"
     exceptions = concat $ maybeToList $ functionExceptions f
 

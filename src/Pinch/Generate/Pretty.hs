@@ -88,7 +88,7 @@ data Exp
   | EDo [Stm]
   | EInfix Name Exp Exp
   | EList [Exp]
-  | ELam [Name] Exp
+  | ELam [Pat] Exp
   deriving (Show)
 
 data Stm
@@ -204,3 +204,6 @@ cList = concatWith (surround (comma <> space))
 
 instance IsString Exp where
   fromString = EVar . T.pack
+
+instance IsString Pat where
+  fromString = PVar . T.pack
