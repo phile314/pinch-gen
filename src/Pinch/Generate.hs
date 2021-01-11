@@ -332,7 +332,7 @@ unionDatatype nm fs defCon = do
           SRCNone -> []
           SRCVoid c ->
             [ H.Match "pinch" [H.PCon (nm <> c) []]
-              ( H.EApp "Pinch.pinch" [ "Pinch.Unit" ]
+              ( H.EApp "Pinch.pinch" [ "Pinch.Internal.RPC.Unit" ]
               )
             ]
   let unpinch = H.FunBind
@@ -349,7 +349,7 @@ unionDatatype nm fs defCon = do
                   SRCNone -> "Control.Applicative.empty"
                   SRCVoid c ->
                     H.EInfix "Prelude.<$" (H.EVar (nm <> c))
-                      "(Pinch.unpinch v :: Pinch.Parser Pinch.Unit)"
+                      "(Pinch.unpinch v :: Pinch.Parser Pinch.Internal.RPC.Unit)"
               )
               fields
         ]
@@ -386,20 +386,22 @@ gField prefix (i, f) = do
 
 gService :: Service SourcePos -> GenerateM ([H.Decl], [H.Decl], [H.Decl])
 gService s = do
-  (nms, tys, alts, calls, tyDecls) <- unzip5 <$> traverse gFunction (serviceFunctions s)
+  (nms, tys, handlers, calls, tyDecls) <- unzip5 <$> traverse gFunction (serviceFunctions s)
   let serverDecls =
         [ H.DataDecl serviceTyName [ H.RecConDecl serviceConName $ zip nms tys ] []
         , H.TypeSigDecl (prefix <> "_mkServer") (H.TyLam [H.TyCon serviceConName] (H.TyCon "Pinch.Server.ThriftServer"))
         , H.FunBind
           [ H.Match (prefix <> "_mkServer") [H.PVar "server"]
-            ( H.EApp "Pinch.Server.ThriftServer"
-              [ H.ELam ["ctx", "m"]
-                (
-                  H.ECase (H.EApp "Pinch.messageName" ["m"]) (alts ++ [
-                    H.Alt (H.PVar "_") (H.EApp "Prelude.pure" [H.EApp "Pinch.Server.unknownMethodError" ["m"]])
-                  ])
-                )
-              ]
+            ( H.ELet "functions" 
+              (H.EApp "Data.HashMap.Strict.fromList" [ H.EList handlers ] )
+              ( H.EApp "Pinch.Server.createServer"
+                [ (H.ELam ["nm"]
+                    (H.EApp "Data.HashMap.Strict.lookup"
+                      [ "nm", "functions" ]
+                    )
+                  )
+                ]
+              )
             )
           ]
         ]
@@ -416,31 +418,37 @@ gFieldType f = do
     Just Optional -> pure (False, H.TyApp (H.TyCon $ "Prelude.Maybe") [ ty ])
     _ -> pure (True, ty)
 
-gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Alt, [H.Decl], [H.Decl])
+gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Exp, [H.Decl], [H.Decl])
 gFunction f = do
   argTys <- traverse (fmap snd . gFieldType) (functionParameters f)
   retType <- maybe (pure tyUnit) gTypeReference (functionReturnType f)
 
 
   argDataTy <- structDatatype argDataTyNm (functionParameters f)
+  let catchers = map
+        (\e -> H.EApp "Control.Exception.Handler"
+          [ H.EInfix "Prelude.." "Prelude.pure" (H.EVar $ dtNm <> "_" <> capitalize (fieldName e))
+          ]
+        ) exceptions
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
   (resultDecls, resultDataTy, resultDataCon) <- case (functionReturnType f, exceptions) of
     (Nothing, []) -> pure ([], H.TyCon "Pinch.Unit", "Pinch.Unit")
     _ -> do
-      let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.ThriftResult" (H.TyCon dtNm))
+      let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.Internal.RPC.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
             , H.FunBind (
-               map (\e -> H.Match "toEither" [H.PCon (dtNm <> "_" <> capitalize (fieldName e)) [H.PVar "x"]] (H.EApp "Prelude.Left" [H.EApp "Control.Exception.SomeException" ["x"]])) exceptions
-               ++ [ H.Match "toEither" [H.PCon (dtNm <> "_Success") (const (H.PVar "x") <$> maybeToList (functionReturnType f))] (H.EApp "Prelude.Right" (maybeToList $ ("x" <$ functionReturnType f) <|> pure "()"))]
+               map (\e -> H.Match "unwrap" [H.PCon (dtNm <> "_" <> capitalize (fieldName e)) [H.PVar "x"]] (H.EApp "Control.Exception.throwIO" ["x"])) exceptions
+               ++ [ H.Match "unwrap" [H.PCon (dtNm <> "_Success") (const (H.PVar "x") <$> maybeToList (functionReturnType f))] (H.EApp "Prelude.pure" (maybeToList $ ("x" <$ functionReturnType f) <|> pure "()"))]
               )
-            , H.FunBind [H.Match "wrapException" [] (
-                H.EApp "Pinch.Internal.RPC.wrapExceptions" [
-                  H.EList (map (\e ->
-                    H.EApp "Pinch.Internal.RPC.Wrapper" [(H.EVar $ dtNm <> "_" <> capitalize (fieldName e))]
-                  ) exceptions)
+            , H.FunBind [H.Match "wrap" ["m"] (
+              ( H.EApp "Control.Exception.catches"
+                [ H.EInfix
+                    (if isNothing (functionReturnType f) then "Prelude.<$" else "Prelude.<$>")
+                    (H.EVar $ dtNm <> "_Success")
+                    "m"
+                , H.EList catchers
                 ]
-                )
-              ]
+              ) ) ]
             ]
       dt <- unionDatatype
         dtNm
@@ -455,32 +463,29 @@ gFunction f = do
   let srvFunTy = H.TyLam ([H.TyCon "Pinch.Server.Context"] ++ argTys) (H.TyApp tyIO [retType])
   let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
-  let callArgs = map (\(i, p) ->
-        let
-          op = if fieldRequiredness p == Just Optional then "Pinch.?=" else "Pinch..="
-          index = H.ELit $ H.LInt $ fromMaybe i (fieldIdentifier p)
-        in H.EInfix op index (H.EVar $ fieldName p)
-        ) (zip [1..] $ functionParameters f)
   let call = H.FunBind
         [ H.Match nm ( map (H.PVar . fieldName) $ functionParameters f)
           ( H.EApp "Pinch.Client.ThriftCall"
-            [ H.EApp "Pinch.mkMessage" [ H.ELit $ H.LString $ functionName f, "Pinch.Call", H.ELit $ H.LInt 0, H.EApp "Pinch.struct" [ H.EList $ callArgs ] ]
+            [ H.EApp "Pinch.mkMessage"
+              [ H.ELit $ H.LString $ functionName f
+              , if functionOneWay f then "Pinch.Oneway" else "Pinch.Call"
+              , H.ELit $ H.LInt 0
+              , H.EApp (H.EVar argDataTyNm) $ map (H.EVar . fieldName) (functionParameters f)
+              ]
             ]
           )
         ]
-  let alt = H.Alt (H.PLit $ H.LString $ functionName f)
-        (H.EApp "Pinch.Server.runServiceMethod"
-          [ H.ELam [ H.PCon argDataTyNm (map H.PVar argVars) ]
-            ( H.EInfix (if isNothing (functionReturnType f) then "Prelude.<$" else "Prelude.<$>")
-                resultDataCon
-                (H.EApp (H.EVar nm)
-                (["server", "ctx" ] ++ map H.EVar argVars) )
+  let handler = H.ETuple
+        [ H.ELit $ H.LString $ functionName f
+        , H.EApp (if functionOneWay f then "Pinch.Server.OnewayHandler" else "Pinch.Server.CallHandler")
+          [ H.ELam [ "ctx", H.PCon argDataTyNm (map H.PVar argVars) ] (
+              (if functionOneWay f then id else (\c -> H.EApp "Pinch.Internal.RPC.wrap" [c]))
+              (H.EApp (H.EVar nm) (["server", "ctx"] ++ map H.EVar argVars))
             )
-          , "m"
           ]
-        )
+        ]
 
-  pure ( nm, srvFunTy, alt, [callSig, call], (argDataTy ++ resultDecls))
+  pure ( nm, srvFunTy, handler, [callSig, call], (argDataTy ++ resultDecls))
   where
     nm = decapitalize $ functionName f
     dtNm = capitalize (functionName f) <> "_Result"

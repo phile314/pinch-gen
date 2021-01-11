@@ -89,6 +89,8 @@ data Exp
   | EInfix Name Exp Exp
   | EList [Exp]
   | ELam [Pat] Exp
+  | ETuple [Exp]
+  | ELet Name Exp Exp
   deriving (Show)
 
 data Stm
@@ -108,11 +110,11 @@ instance Pretty ModuleName where
   pretty (ModuleName x) = pretty x
 
 instance Pretty Module where
-  pretty mod = vsep
-    (map pretty (modPragmas mod)
-     ++ [  "module" <+> pretty (modName mod) <+> "where"]
-     ++ map pretty (modImports mod)
-     ++ map pretty (modDecls mod))
+  pretty mod =
+       vsep (map pretty $ modPragmas mod) <> line <> line
+    <> "module" <+> pretty (modName mod) <+> "where" <> line <> line
+    <> vsep (map pretty $ modImports mod) <> line <> line
+    <> vsep (map pretty $ modDecls mod)
 
 instance Pretty Pragma where
   pretty p = case p of
@@ -129,14 +131,15 @@ instance Pretty ImportNames where
 
 instance Pretty Decl where
   pretty decl = case decl of
-    TypeDecl t1 t2 -> "type" <+> pretty t1 <+> "=" <+> pretty t2
-    DataDecl t [] ds -> "data" <+> pretty t <+> prettyDerivings ds
-    DataDecl t (c:cs) ds -> nest 2 $ vsep $
-      [ "data" <+> pretty t
-      , "=" <+> pretty c
-      ] ++ (map (\c -> "|" <+> pretty c) cs) ++ [ prettyDerivings ds ]
-    InstDecl h decls -> nest 2 $ vsep $ [ pretty h ] ++ map pretty decls
-    FunBind ms -> vsep $ map pretty ms
+    TypeDecl t1 t2 -> "type" <+> pretty t1 <+> "=" <+> pretty t2 <> line
+    DataDecl t [] ds -> "data" <+> pretty t <+> prettyDerivings ds <> line
+    DataDecl t (c:cs) ds -> nest 2 (vsep $
+        [ "data" <+> pretty t
+        , "=" <+> pretty c
+        ] ++ (map (\c -> "|" <+> pretty c) cs) ++ [ prettyDerivings ds ]
+      ) <> line
+    InstDecl h decls -> (nest 2 $ vsep $ [ pretty h ] ++ map pretty decls) <> line
+    FunBind ms -> vsep (map pretty ms) <> line
     TypeSigDecl n ty -> pretty n <+> "::" <+> pretty ty
 
 prettyDerivings :: [Deriving] -> Doc a
@@ -185,6 +188,8 @@ instance Pretty Exp where
     EInfix op e1 e2 -> parens $ hsep [ pretty e1, pretty op, pretty e2]
     EList es -> "[" <+> cList (map pretty es) <+> "]"
     ELam ps e -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e
+    ETuple es -> nest 2 $ tupled $ map pretty es
+    ELet nm e1 e2 -> "let" <+> pretty nm <+> "=" <+> indent 2 (pretty e1) <+> "in" <+> pretty e2
 
 instance Pretty Alt where
   pretty (Alt p e) = pretty p <+> "->" <+> pretty e
