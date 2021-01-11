@@ -465,7 +465,7 @@ gFunction f = do
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let call = H.FunBind
         [ H.Match nm ( map (H.PVar . fieldName) $ functionParameters f)
-          ( H.EApp "Pinch.Client.ThriftCall"
+          ( H.EApp (if functionOneWay f then "Pinch.Client.TOneway" else "Pinch.Client.TCall")
             [ H.EApp "Pinch.mkMessage"
               [ H.ELit $ H.LString $ functionName f
               , if functionOneWay f then "Pinch.Oneway" else "Pinch.Call"
