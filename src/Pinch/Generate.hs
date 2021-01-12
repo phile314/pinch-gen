@@ -88,7 +88,7 @@ gProgram s inp (Program headers defs) = do
   let tyMap = Map.unions tyMaps
   let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) $ Context tyMap s
   let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
-        [ H.PragmaLanguage "TypeFamilies, DeriveGeneric"
+        [ H.PragmaLanguage "TypeFamilies, DeriveGeneric, TypeApplications"
         , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing -fno-warn-unused-matches" ]
   pure $
     [ -- types
@@ -479,7 +479,9 @@ gFunction f = do
         [ H.ELit $ H.LString $ functionName f
         , H.EApp (if functionOneWay f then "Pinch.Server.OnewayHandler" else "Pinch.Server.CallHandler")
           [ H.ELam [ "ctx", H.PCon argDataTyNm (map H.PVar argVars) ] (
-              (if functionOneWay f then id else (\c -> H.EApp "Pinch.Internal.RPC.wrap" [c]))
+              (if functionOneWay f then id else
+                (\c -> H.EApp (H.ETyApp "Pinch.Internal.RPC.wrap" [ resultDataTy ]) [c])
+              )
               (H.EApp (H.EVar nm) (["server", "ctx"] ++ map H.EVar argVars))
             )
           ]

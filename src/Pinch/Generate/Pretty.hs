@@ -91,6 +91,7 @@ data Exp
   | ELam [Pat] Exp
   | ETuple [Exp]
   | ELet Name Exp Exp
+  | ETyApp Exp [Type]
   deriving (Show)
 
 data Stm
@@ -190,6 +191,7 @@ instance Pretty Exp where
     ELam ps e -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e
     ETuple es -> nest 2 $ tupled $ map pretty es
     ELet nm e1 e2 -> "let" <+> pretty nm <+> "=" <+> indent 2 (pretty e1) <+> "in" <+> pretty e2
+    ETyApp e tys -> pretty e <+>  hsep (map (("@"<>) . parens . pretty) tys)
 
 instance Pretty Alt where
   pretty (Alt p e) = pretty p <+> "->" <+> pretty e
