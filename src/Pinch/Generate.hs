@@ -466,12 +466,8 @@ gFunction f = do
   let call = H.FunBind
         [ H.Match nm ( map (H.PVar . fieldName) $ functionParameters f)
           ( H.EApp (if functionOneWay f then "Pinch.Client.TOneway" else "Pinch.Client.TCall")
-            [ H.EApp "Pinch.mkMessage"
-              [ H.ELit $ H.LString $ functionName f
-              , if functionOneWay f then "Pinch.Oneway" else "Pinch.Call"
-              , H.ELit $ H.LInt 0
-              , H.EApp (H.EVar argDataTyNm) $ map (H.EVar . fieldName) (functionParameters f)
-              ]
+            [ H.ELit $ H.LString $ functionName f
+            , H.EApp (H.EVar argDataTyNm) $ map (H.EVar . fieldName) (functionParameters f)
             ]
           )
         ]
