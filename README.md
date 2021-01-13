@@ -29,6 +29,13 @@ package provide an instance. For some background, see https://github.com/haskell
 solution is to depend on the `vector-instances` package and pass `--hashable-vec-mod Data.Vector.Instances` to
 pinch-gen.
 
+Compatibility
+-------------
+
+| pinch version | pinch-gen version |
+|---------------|-------------------|
+| 0.4           | 0.4               |
+
 
 Example
 -------
