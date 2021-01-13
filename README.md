@@ -1,10 +1,12 @@
 
-![build](https://github.com/phile314/pinch-gen/workflows/build/badge.svg)
+[![build]](https://github.com/phile314/pinch-gen)
 
 `pinch` aims to provide an alternative implementation of Apache Thrift for
 Haskell. The `pinch` library itself acts only as a serialization library. Types
 specify their Thrift encoding by defining instances of the `Pinchable`
 typeclass, which may be done by hand or automatically with the use of Generics.
+
+  [build]: https://github.com/phile314/pinch-gen/workflows/build/badge.svg
 
 Haddock documentation for this package is avilable on [Hackage].
 
