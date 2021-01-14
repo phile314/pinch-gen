@@ -1,5 +1,4 @@
-# Revision history for pinch-gen
-
-## 0.1.0.0 -- YYYY-mm-dd
+0.4 (2021-XX-XX)
+================
 
 * First version. Released on an unsuspecting world.
