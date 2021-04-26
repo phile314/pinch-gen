@@ -1,7 +1,7 @@
 cabal-version:       >=1.10
 
 name:                pinch-gen
-version:             0.4.0.0
+version:             0.4.1.0
 -- synopsis:
 synopsis:            A code generator for the pinch Thrift library.
 homepage:            https://github.com/phile314/pinch-gen
