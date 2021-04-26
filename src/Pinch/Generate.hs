@@ -181,6 +181,7 @@ gTypeReference ref = case ref of
   BinaryType _ _ -> tyCon "Data.ByteString.ByteString"
   BoolType _ _ -> tyCon "Prelude.Bool"
   DoubleType _ _ -> tyCon "Prelude.Double"
+  ByteType _ _ -> tyCon "Data.Int.Int8"
   I16Type _ _ -> tyCon "Data.Int.Int16"
   I32Type _ _ -> tyCon "Data.Int.Int32"
   I64Type _ _ -> tyCon "Data.Int.Int64"
@@ -194,7 +195,6 @@ gTypeReference ref = case ref of
         Nothing -> tyCon $ capitalize ty
         Just (H.ModuleName n) -> pure $ H.TyCon $ n <> "." <> capitalize (last xs)
     _ -> tyCon $ capitalize ty
-  ty -> error $ "Unsupported type: " <> show ty
 
   where tyCon = pure . H.TyCon
 
