@@ -88,7 +88,7 @@ gProgram s inp (Program headers defs) = do
   let tyMap = Map.unions tyMaps
   let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) $ Context tyMap s
   let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
-        [ H.PragmaLanguage "TypeFamilies, DeriveGeneric, TypeApplications", "OverloadedStrings"
+        [ H.PragmaLanguage "TypeFamilies, DeriveGeneric, TypeApplications, OverloadedStrings"
         , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing -fno-warn-unused-matches" ]
   pure $
     [ -- types
@@ -159,9 +159,42 @@ gInclude dir i = do
 
 gDefinition :: Definition SourcePos -> GenerateM ([H.Decl], [H.Decl], [H.Decl])
 gDefinition def = case def of
-  ConstDefinition _ -> pure ([], [], [])
+  ConstDefinition c -> (\x -> (x, [], [])) <$> gConst c
   TypeDefinition ty -> (\x -> (x, [], [])) <$> gType ty
   ServiceDefinition s -> gService s
+
+gConst :: A.Const SourcePos -> GenerateM [H.Decl]
+gConst const = do
+  tyRef <- gTypeReference (constValueType const)
+  value <- gConstValue (constValue const)
+  pure
+    [ H.TypeSigDecl name tyRef
+    , H.FunBind [H.Match name [] value]
+    ]
+  where
+    name = decapitalize (constName const)
+
+gConstValue :: A.ConstValue SourcePos -> GenerateM H.Exp
+gConstValue val = case val of
+  ConstInt n _ -> pure (H.ELit (H.LInt n))
+  ConstFloat n _ -> pure (H.ELit (H.LFloat n))
+  ConstLiteral s _ -> pure (H.ELit (H.LString s))
+  ConstIdentifier id _
+    | xs @(_:_:_) <- T.splitOn "." id -> do
+      map <- asks cModuleMap
+      case Map.lookup (mconcat $ init xs) map of
+        Nothing ->
+          -- TODO this should probably be an error
+          pure (H.EVar (decapitalize id))
+        Just (H.ModuleName n) ->
+          pure $ H.EVar (n <> "." <> decapitalize (last xs))
+    | otherwise -> pure $ H.EVar (decapitalize id)
+  ConstList xs _ -> do
+    elems <- traverse gConstValue xs
+    pure (H.EApp "Data.Vector.fromList" [H.EList elems])
+  ConstMap xs _ -> do
+    tuples <- traverse (\(k, v) -> H.ETuple <$> traverse gConstValue [k, v]) xs
+    pure (H.EApp "Data.HashMap.Strict.fromList" [H.EList tuples])
 
 gType :: Type SourcePos -> GenerateM [H.Decl]
 gType ty = case ty of
@@ -392,7 +425,7 @@ gService s = do
         , H.TypeSigDecl (prefix <> "_mkServer") (H.TyLam [H.TyCon serviceConName] (H.TyCon "Pinch.Server.ThriftServer"))
         , H.FunBind
           [ H.Match (prefix <> "_mkServer") [H.PVar "server"]
-            ( H.ELet "functions" 
+            ( H.ELet "functions"
               (H.EApp "Data.HashMap.Strict.fromList" [ H.EList handlers ] )
               ( H.EApp "Pinch.Server.createServer"
                 [ (H.ELam ["nm"]

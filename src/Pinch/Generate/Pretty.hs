@@ -104,6 +104,7 @@ data Alt
 
 data Lit
   = LInt Integer
+  | LFloat Double
   | LString T.Text
   deriving (Show)
 
@@ -204,6 +205,7 @@ instance Pretty Stm where
 instance Pretty Lit where
   pretty l = case l of
     LInt i -> pretty i
+    LFloat f -> pretty f
     LString t -> "\"" <> pretty t <> "\""
 
 cList = concatWith (surround (comma <> space))
