@@ -1,4 +1,4 @@
-0.X.X (TODO)
+0.4.2 (2021-05-31)
 ==================
 
 * Support for constants (thanks to @alexbiehl)
