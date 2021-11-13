@@ -474,8 +474,8 @@ gFunction f = do
           ]
         ) exceptions
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
-  (resultDecls, resultDataTy, _) <- case (functionReturnType f, exceptions) of
-    (Nothing, []) -> pure ([], H.TyCon "Pinch.Internal.RPC.Unit", "Pinch.Internal.RPC.Unit")
+  (resultDecls, resultDataTy) <- case (functionReturnType f, exceptions) of
+    (Nothing, []) -> pure ([], H.TyCon "Pinch.Internal.RPC.Unit")
     _ -> do
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.Internal.RPC.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
@@ -500,7 +500,7 @@ gFunction f = do
           Nothing -> SRCVoid "_Success"
           _ -> SRCNone
         )
-      pure ((thriftResultInst : dt), H.TyCon dtNm, H.EVar $ dtNm <> "_Success")
+      pure ((thriftResultInst : dt), H.TyCon dtNm)
 
 
   let srvFunTy = H.TyLam ([H.TyCon "Pinch.Server.Context"] ++ argTys) (H.TyApp tyIO [retType])
