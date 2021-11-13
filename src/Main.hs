@@ -7,9 +7,6 @@ import Options.Applicative
 
 import Pinch.Generate
 
-import Data.Text       as T
-import System.FilePath
-
 data Options = Options
   { inputFile   :: FilePath
   , outputDir   :: FilePath

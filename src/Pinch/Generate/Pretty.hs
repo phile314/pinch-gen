@@ -5,7 +5,8 @@ module Pinch.Generate.Pretty where
 
 import           Data.String
 import qualified Data.Text                 as T
-import           Data.Text.Prettyprint.Doc
+import           Prelude hiding (mod)
+import           Prettyprinter
 
 newtype ModuleName = ModuleName T.Text
   deriving (Show)
@@ -120,7 +121,7 @@ instance Pretty Module where
 
 instance Pretty Pragma where
   pretty p = case p of
-    PragmaLanguage p -> "{-# LANGUAGE" <+> pretty p <+> "#-}"
+    PragmaLanguage p' -> "{-# LANGUAGE" <+> pretty p' <+> "#-}"
     PragmaOptsGhc o -> "{-# OPTIONS_GHC" <+> pretty o <+> "#-}"
 
 instance Pretty ImportDecl where
@@ -138,7 +139,7 @@ instance Pretty Decl where
     DataDecl t (c:cs) ds -> nest 2 (vsep $
         [ "data" <+> pretty t
         , "=" <+> pretty c
-        ] ++ (map (\c -> "|" <+> pretty c) cs) ++ [ prettyDerivings ds ]
+        ] ++ (map (\c' -> "|" <+> pretty c') cs) ++ [ prettyDerivings ds ]
       ) <> line
     InstDecl h decls -> (nest 2 $ vsep $ [ pretty h ] ++ map pretty decls) <> line
     FunBind ms -> vsep (map pretty ms) <> line
@@ -154,7 +155,7 @@ instance Pretty Deriving where
 instance Pretty ConDecl where
   pretty (ConDecl n args) = hsep $ [ pretty n ] ++ map pretty args
   pretty (RecConDecl n args) = hsep $ [ pretty n, "{", fields, "}" ]
-    where fields = cList $ map (\(n, v) -> pretty n <+> "::" <+> pretty v) args
+    where fields = cList $ map (\(f, v) -> pretty f <+> "::" <+> pretty v) args
 
 instance Pretty InstHead where
   pretty (InstHead cs n ty) = "instance" <> context <+> pretty n <+> pretty ty <+> "where"
@@ -182,17 +183,17 @@ instance Pretty Pat where
 instance Pretty Exp where
   pretty e = case e of
     EVar n -> pretty n
-    EApp e es -> pretty e <+> hsep (map (parens . pretty) es)
+    EApp e' es -> pretty e' <+> hsep (map (parens . pretty) es)
     ELit l -> pretty l
-    ETyAnn e ty -> parens $ pretty e <+> "::" <+> pretty ty
-    ECase e as -> nest 2 $ vsep $ ["case" <+> pretty e <+> "of"] ++ map pretty as
+    ETyAnn e' ty -> parens $ pretty e' <+> "::" <+> pretty ty
+    ECase e' as -> nest 2 $ vsep $ ["case" <+> pretty e' <+> "of"] ++ map pretty as
     EDo s -> nest 2 $ vsep $ ["do"] ++ map pretty s
     EInfix op e1 e2 -> parens $ hsep [ pretty e1, pretty op, pretty e2]
     EList es -> "[" <+> cList (map pretty es) <+> "]"
-    ELam ps e -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e
+    ELam ps e' -> parens $ "\\" <> hsep (map pretty ps) <+> "->" <+> pretty e'
     ETuple es -> nest 2 $ tupled $ map pretty es
     ELet nm e1 e2 -> "let" <+> pretty nm <+> "=" <+> indent 2 (pretty e1) <+> "in" <+> pretty e2
-    ETyApp e tys -> pretty e <+>  hsep (map (("@"<>) . parens . pretty) tys)
+    ETyApp e' tys -> pretty e' <+>  hsep (map (("@"<>) . parens . pretty) tys)
 
 instance Pretty Alt where
   pretty (Alt p e) = pretty p <+> "->" <+> pretty e
@@ -208,6 +209,7 @@ instance Pretty Lit where
     LFloat f -> pretty f
     LString t -> "\"" <> pretty t <> "\""
 
+cList :: [Doc ann] -> Doc ann
 cList = concatWith (surround (comma <> space))
 
 

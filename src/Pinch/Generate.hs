@@ -13,12 +13,19 @@ import           Data.List
 import           Data.Maybe
 import qualified Data.Text                             as T
 import           Data.Text.Encoding
-import           Data.Text.Prettyprint.Doc
-import           Data.Text.Prettyprint.Doc.Render.Text
+import           Prettyprinter
+import           Prettyprinter.Render.Text
 import           Data.Void
-import           Language.Thrift.AST                   as A
+import           Language.Thrift.AST                   as A hiding ( exceptions
+                                                                   , fields
+                                                                   , headers
+                                                                   , name
+                                                                   , path
+                                                                   , value
+                                                                   )
 import           Language.Thrift.Parser
 import qualified Pinch.Generate.Pretty                 as H
+import           Prelude                               hiding (mod)
 import           System.Directory
 import           System.FilePath
 import           System.IO
@@ -168,31 +175,31 @@ gDefinition def = case def of
   ServiceDefinition s -> gService s
 
 gConst :: A.Const SourcePos -> GenerateM [H.Decl]
-gConst const = do
-  tyRef <- gTypeReference (constValueType const)
-  value <- gConstValue (constValue const)
+gConst constPos = do
+  tyRef <- gTypeReference (constValueType constPos)
+  value <- gConstValue (constValue constPos)
   pure
     [ H.TypeSigDecl name tyRef
     , H.FunBind [H.Match name [] value]
     ]
   where
-    name = decapitalize (constName const)
+    name = decapitalize (constName constPos)
 
 gConstValue :: A.ConstValue SourcePos -> GenerateM H.Exp
 gConstValue val = case val of
   ConstInt n _ -> pure (H.ELit (H.LInt n))
   ConstFloat n _ -> pure (H.ELit (H.LFloat n))
   ConstLiteral s _ -> pure (H.ELit (H.LString s))
-  ConstIdentifier id _
-    | xs @(_:_:_) <- T.splitOn "." id -> do
-      map <- asks cModuleMap
-      case Map.lookup (mconcat $ init xs) map of
+  ConstIdentifier ident _
+    | xs @(_:_:_) <- T.splitOn "." ident -> do
+      moduleMap <- asks cModuleMap
+      case Map.lookup (mconcat $ init xs) moduleMap of
         Nothing ->
           -- TODO this should probably be an error
-          pure (H.EVar (decapitalize id))
+          pure (H.EVar (decapitalize ident))
         Just (H.ModuleName n) ->
           pure $ H.EVar (n <> "." <> decapitalize (last xs))
-    | otherwise -> pure $ H.EVar (decapitalize id)
+    | otherwise -> pure $ H.EVar (decapitalize ident)
   ConstList xs _ -> do
     elems <- traverse gConstValue xs
     pure (H.EApp "Data.Vector.fromList" [H.EList elems])
@@ -215,6 +222,7 @@ gTypedef def = do
 gTypeReference :: TypeReference SourcePos -> GenerateM H.Type
 gTypeReference ref = case ref of
   StringType _ _ -> tyCon "Data.Text.Text"
+  SListType _ _ -> tyCon "Data.Text.Text" -- http://thrift.apache.org/docs/idl#senum
   BinaryType _ _ -> tyCon "Data.ByteString.ByteString"
   BoolType _ _ -> tyCon "Prelude.Bool"
   DoubleType _ _ -> tyCon "Prelude.Double"
@@ -226,9 +234,9 @@ gTypeReference ref = case ref of
   MapType kTy vTy _ _ -> H.TyApp (H.TyCon $ "Data.HashMap.Strict.HashMap") <$> traverse gTypeReference [kTy, vTy]
   SetType ty _ _ -> H.TyApp (H.TyCon $ "Data.HashSet.HashSet") <$> traverse gTypeReference [ty]
   DefinedType ty _ -> case T.splitOn "." ty of
-    xs@(x1:x2:_) -> do
-      map <- asks cModuleMap
-      case Map.lookup (mconcat $ init xs) map of
+    xs@(_:_:_) -> do
+      moduleMap <- asks cModuleMap
+      case Map.lookup (mconcat $ init xs) moduleMap of
         Nothing -> tyCon $ capitalize ty
         Just (H.ModuleName n) -> pure $ H.TyCon $ n <> "." <> capitalize (last xs)
     _ -> tyCon $ capitalize ty
@@ -257,8 +265,6 @@ gEnum e = do
     ] else [])
   where
     tyName = enumName e
-    unpinch = H.Match "unpinch" [H.PVar "x"]
-      (H.EApp "Prelude.fmap" [ "Prelude.toEnum Prelude.. Prelude.fromIntegral", H.EApp "Pinch.unpinch" [ "x" ]])
     (cons, fromEnum', toEnum', pinch', unpinchAlts') = unzip5 $ map gEnumDef $ zip [0..] $ enumValues e
 
     defAlt = H.Alt (H.PVar "_")
@@ -312,7 +318,7 @@ structDatatype nm fs = do
   let stag = H.TypeDecl (H.TyApp tag [ H.TyCon nm ]) (H.TyCon $ "Pinch.TStruct")
   let pinch = H.FunBind
         [ H.Match "pinch" [H.PCon nm $ map H.PVar nms]
-            ( H.EApp "Pinch.struct" [ H.EList $ flip map fields $ \(fId, fNm, fTy, fReq) ->
+            ( H.EApp "Pinch.struct" [ H.EList $ flip map fields $ \(fId, fNm, _, fReq) ->
               let
                  op = if fReq then "Pinch..=" else "Pinch.?="
                in H.EInfix op (H.ELit $ H.LInt fId) (H.EVar fNm)
@@ -321,7 +327,7 @@ structDatatype nm fs = do
   let unpinch = H.FunBind
         [ H.Match "unpinch" [H.PVar "value"] $
             foldl'
-              (\acc (fId, fNm, fTy, fReq) ->
+              (\acc (fId, _, _, fReq) ->
                 H.EInfix "Prelude.<*>" acc (
                   H.EInfix (if fReq then "Pinch..:" else "Pinch..:?")
                     "value"
@@ -390,7 +396,7 @@ unionDatatype nm fs defCon = do
               )
               fields
         ]
-  let cons = map (\(_, nm, ty, _) -> H.ConDecl nm [ ty ]) fields ++ case defCon of
+  let cons = map (\(_, nm', ty, _) -> H.ConDecl nm' [ ty ]) fields ++ case defCon of
         SRCNone -> []
         SRCVoid c -> [H.ConDecl (nm <> c) []]
   let arbitrary = H.FunBind
@@ -398,8 +404,8 @@ unionDatatype nm fs defCon = do
             H.EApp "Test.QuickCheck.oneof"
             [ H.EList $
               map
-                (\(_, nm, _, _) ->
-                  H.EInfix "Prelude.<$>" (H.EVar nm) "Test.QuickCheck.arbitrary"
+                (\(_, nm', _, _) ->
+                  H.EInfix "Prelude.<$>" (H.EVar nm') "Test.QuickCheck.arbitrary"
                 )
                 fields
             ]
@@ -468,7 +474,7 @@ gFunction f = do
           ]
         ) exceptions
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
-  (resultDecls, resultDataTy, resultDataCon) <- case (functionReturnType f, exceptions) of
+  (resultDecls, resultDataTy, _) <- case (functionReturnType f, exceptions) of
     (Nothing, []) -> pure ([], H.TyCon "Pinch.Internal.RPC.Unit", "Pinch.Internal.RPC.Unit")
     _ -> do
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.Internal.RPC.ThriftResult" (H.TyCon dtNm))
@@ -528,11 +534,14 @@ gFunction f = do
     argDataTyNm = capitalize $ functionName f <> "_Args"
     exceptions = concat $ maybeToList $ functionExceptions f
 
+tag, tyUnit, tyIO :: H.Type
 tag = H.TyCon $ "Tag"
-clPinchable = "Pinch.Pinchable"
-clHashable = "Data.Hashable.Hashable"
 tyUnit = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
+
+clPinchable, clHashable, clException, clArbitrary :: H.ClassName
+clPinchable = "Pinch.Pinchable"
+clHashable = "Data.Hashable.Hashable"
 clException = "Control.Exception.Exception"
 clArbitrary = "Test.QuickCheck.Arbitrary"
 
@@ -542,6 +551,7 @@ decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.
 capitalize :: T.Text -> T.Text
 capitalize s  = if T.null s then "" else T.singleton (toUpper $ T.head s) <> T.tail s
 
+derivingShow, derivingEq, derivingOrd, derivingGenerics, derivingBounded :: H.Deriving
 derivingShow = H.DeriveClass $ H.TyCon $ "Prelude.Show"
 derivingEq = H.DeriveClass $ H.TyCon $ "Prelude.Eq"
 derivingOrd = H.DeriveClass $ H.TyCon $ "Prelude.Ord"
