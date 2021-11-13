@@ -89,7 +89,7 @@ gProgram s inp (Program headers defs) = do
   let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) $ Context tyMap s
   let mkMod suffix = H.Module (H.ModuleName $ modBaseName <> suffix)
         [ H.PragmaLanguage "TypeFamilies, DeriveGeneric, TypeApplications, OverloadedStrings"
-        , H.PragmaOptsGhc "-fno-warn-unused-imports -fno-warn-name-shadowing -fno-warn-unused-matches" ]
+        , H.PragmaOptsGhc "-w" ]
   pure $
     [ -- types
       mkMod ".Types"
