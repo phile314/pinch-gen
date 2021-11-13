@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main where
 
 
@@ -27,6 +29,11 @@ pGenSettings = Settings
   <$> strOption (long "hashable-vec-mod" <> help "Module containing hashable instances for vector")
   <*> flag True False (long "no-generate-arbitrary")
   <*> many (strOption (long "extra-import" <> metavar "IMPORT"))
+  <*> strOption
+        ( long "module-prefix"
+        <> help "Prefix of module name for generated files, e.g. 'Gen.Agent.'"
+        <> value ""
+        )
 
 main :: IO ()
 main = do

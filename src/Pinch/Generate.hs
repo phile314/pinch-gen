@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Pinch.Generate where
@@ -31,6 +32,7 @@ data Settings
   { sHashableVectorInstanceModule :: T.Text
   , sGenerateArbitrary            :: Bool
   , sExtraImports                 :: [T.Text]
+  , sModulePrefix                 :: T.Text
   } deriving (Show)
 
 generate :: Settings -> FilePath -> FilePath -> IO ()
@@ -53,19 +55,22 @@ moduleFile m =
     (H.ModuleName n) = H.modName m
     parts = map T.unpack $ T.splitOn "." n
 
-extractModuleName :: FilePath -> T.Text
-extractModuleName f = mconcat $ map capitalize parts
+getModuleName :: Settings -> [Header SourcePos] -> FilePath -> T.Text
+getModuleName settings headers path =
+  T.concat
+    [ sModulePrefix settings
+    , extractNamespace headers
+    , extractName path
+    ]
   where
-    fileName = dropExtension $ takeFileName f
-    parts = T.splitOn "_" $ T.pack fileName
+    extractNamespace = fromMaybe "" . listToMaybe . mapMaybe getNamespaceHeader
+    getNamespaceHeader = \case
+      HeaderNamespace (Namespace l n _)
+        | l == "hs" || l == "*"
+        -> Just (n <> ".")
+      _ -> Nothing
 
-extractNamespace :: [Header SourcePos] -> Maybe T.Text
-extractNamespace headers =
-  listToMaybe $ mapMaybe (\x -> case x of
-    HeaderNamespace (Namespace l n _) | l == "hs" || l == "*" -> Just (n <> ".")
-    _ -> Nothing
-  ) headers
-
+    extractName = T.concat . map capitalize . T.splitOn "_" . T.pack . takeBaseName
 
 loadFile :: FilePath -> IO (Program SourcePos)
 loadFile inp = do
@@ -83,7 +88,7 @@ parseFromFile' path = P.runParser thriftIDL path . decodeUtf8 <$> BS.readFile pa
 
 gProgram :: Settings -> FilePath -> Program SourcePos -> IO [H.Module]
 gProgram s inp (Program headers defs) = do
-  (imports, tyMaps) <- unzip <$> traverse (gInclude baseDir) incHeaders
+  (imports, tyMaps) <- unzip <$> traverse (gInclude s baseDir) incHeaders
 
   let tyMap = Map.unions tyMaps
   let (typeDecls, clientDecls, serverDecls) = unzip3 $ runReader (traverse gDefinition defs) $ Context tyMap s
@@ -113,8 +118,7 @@ gProgram s inp (Program headers defs) = do
     ]
 
   where
-    ns = fromMaybe "" $ extractNamespace headers
-    modBaseName = ns <> extractModuleName inp
+    modBaseName = getModuleName s headers inp
     baseDir = dropFileName inp
     incHeaders = mapMaybe (\x -> case x of
       HeaderInclude i -> Just i
@@ -149,11 +153,11 @@ data Context
 
 type GenerateM = Reader Context
 
-gInclude :: FilePath -> Include SourcePos -> IO (H.ImportDecl, ModuleMap)
-gInclude dir i = do
+gInclude :: Settings -> FilePath -> Include SourcePos -> IO (H.ImportDecl, ModuleMap)
+gInclude s dir i = do
   -- TODO handle recursive includes ...
   (Program headers _) <- loadFile (dir </> (T.unpack $ includePath i))
-  let modName = H.ModuleName $ fromMaybe "" (extractNamespace headers) <> extractModuleName (T.unpack $ includePath i) <> ".Types"
+  let modName = H.ModuleName $ getModuleName s headers (T.unpack $ includePath i) <> ".Types"
   let thriftModName = T.pack $ dropExtension $ T.unpack $ includePath i
   pure (H.ImportDecl modName True H.IEverything, Map.singleton thriftModName modName)
 
