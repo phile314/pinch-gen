@@ -475,7 +475,7 @@ gFunction f = do
         ) exceptions
   let resultField = fmap (\ty -> Field (Just 0) (Just Optional) ty "success" Nothing  [] Nothing (Pos.initialPos "")) (functionReturnType f)
   (resultDecls, resultDataTy) <- case (functionReturnType f, exceptions) of
-    (Nothing, []) -> pure ([], H.TyCon "Pinch.Internal.RPC.Unit")
+    (Nothing, []) -> pure ([], H.TyCon $ if functionOneWay f then "()" else "Pinch.Internal.RPC.Unit")
     _ -> do
       let thriftResultInst = H.InstDecl (H.InstHead [] "Pinch.Internal.RPC.ThriftResult" (H.TyCon dtNm))
             [ H.TypeDecl (H.TyApp (H.TyCon "ResultType") [ H.TyCon dtNm ]) retType
