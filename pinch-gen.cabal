@@ -20,7 +20,7 @@ executable pinch-gen
   hs-source-dirs:      src
   other-modules:       Pinch.Generate
                      , Pinch.Generate.Pretty
-  build-depends:       base >=4.12 && < 4.16
+  build-depends:       base >=4.12 && < 4.17
                      , bytestring
                      , directory
                      , filepath
