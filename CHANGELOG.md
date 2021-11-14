@@ -1,3 +1,9 @@
+0.4.3 (2021-11-14)
+==================
+
+* Fix GHC 9.2 compatibility (thanks to @brandon-leapyear)
+* Allow arbitrary module prefixes (#5, thanks to @brandon-leapyear)
+
 0.4.2 (2021-05-31)
 ==================
 
