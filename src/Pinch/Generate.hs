@@ -38,6 +38,7 @@ data Settings
   = Settings
   { sHashableVectorInstanceModule :: T.Text
   , sGenerateArbitrary            :: Bool
+  , sGenerateNFData               :: Bool
   , sExtraImports                 :: [T.Text]
   , sModulePrefix                 :: T.Text
   } deriving (Show)
@@ -107,7 +108,8 @@ gProgram s inp (Program headers defs) = do
       mkMod ".Types"
       (imports ++ defaultImports ++ map
         (\n -> H.ImportDecl (H.ModuleName n) True H.IEverything)
-        (sExtraImports s ++ if sGenerateArbitrary s then [ "Test.QuickCheck" ] else [])
+        (sExtraImports s ++ (if sGenerateArbitrary s then [ "Test.QuickCheck" ] else [])
+                         ++ (if sGenerateNFData s then [ "Control.DeepSeq" ] else []))
       )
       (concat typeDecls)
     , -- client
@@ -135,7 +137,6 @@ gProgram s inp (Program headers defs) = do
     defaultImports =
       [ H.ImportDecl (H.ModuleName "Prelude") True H.IEverything
       , H.ImportDecl (H.ModuleName "Control.Applicative") True H.IEverything
-      , H.ImportDecl (H.ModuleName "Control.DeepSeq") True H.IEverything
       , H.ImportDecl (H.ModuleName "Control.Exception") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch.Server") True H.IEverything
@@ -259,12 +260,14 @@ gEnum e = do
       , H.FunBind (toEnum' ++ [toEnumDef])
       ]
     , H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
-    , H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
-    ] ++ if sGenerateArbitrary settings then [
+    ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon tyName)) [
         H.FunBind [ arbitrary ]
       ]
     ] else [])
+    ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
+    ] else []))
   where
     tyName = enumName e
     (cons, fromEnum', toEnum', pinch', unpinchAlts') = unzip5 $ map gEnumDef $ zip [0..] $ enumValues e
@@ -304,13 +307,12 @@ gEnumDef (i, ed) =
 
 gStruct :: Struct SourcePos -> GenerateM [H.Decl]
 gStruct s = case structKind s of
-  UnionKind -> (++ [hashable, nfdata]) <$> unionDatatype tyName (structFields s) SRCNone
-  StructKind -> (++ [hashable, nfdata]) <$> structDatatype tyName (structFields s)
-  ExceptionKind -> (++ [hashable, nfdata, ex]) <$>  structDatatype tyName (structFields s)
+  UnionKind -> (++ [hashable]) <$> unionDatatype tyName (structFields s) SRCNone
+  StructKind -> (++ [hashable]) <$> structDatatype tyName (structFields s)
+  ExceptionKind -> (++ [hashable, ex]) <$>  structDatatype tyName (structFields s)
   where
     tyName = structName s
     hashable = H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
-    nfdata = H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
     ex = H.InstDecl (H.InstHead [] clException (H.TyCon tyName)) []
 
 
@@ -360,6 +362,9 @@ structDatatype nm fs = do
     , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
     ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
+    ] else [])
+      ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon nm)) []
     ] else [])
 
 data ServiceResultCon = SRCNone | SRCVoid H.Name
@@ -421,6 +426,9 @@ unionDatatype nm fs defCon = do
       , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
     ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
+    ] else [])
+    ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon nm)) []
     ] else [])
 
 gField :: T.Text -> (Integer, Field SourcePos) -> GenerateM (Integer, H.Name, H.Type, Bool)
