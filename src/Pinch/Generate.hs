@@ -38,6 +38,7 @@ data Settings
   = Settings
   { sHashableVectorInstanceModule :: T.Text
   , sGenerateArbitrary            :: Bool
+  , sGenerateNFData               :: Bool
   , sExtraImports                 :: [T.Text]
   , sModulePrefix                 :: T.Text
   } deriving (Show)
@@ -107,7 +108,8 @@ gProgram s inp (Program headers defs) = do
       mkMod ".Types"
       (imports ++ defaultImports ++ map
         (\n -> H.ImportDecl (H.ModuleName n) True H.IEverything)
-        (sExtraImports s ++ if sGenerateArbitrary s then [ "Test.QuickCheck" ] else [])
+        (sExtraImports s ++ (if sGenerateArbitrary s then [ "Test.QuickCheck" ] else [])
+                         ++ (if sGenerateNFData s then [ "Control.DeepSeq" ] else []))
       )
       (concat typeDecls)
     , -- client
@@ -258,11 +260,14 @@ gEnum e = do
       , H.FunBind (toEnum' ++ [toEnumDef])
       ]
     , H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
-    ] ++ if sGenerateArbitrary settings then [
+    ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon tyName)) [
         H.FunBind [ arbitrary ]
       ]
     ] else [])
+    ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
+    ] else []))
   where
     tyName = enumName e
     (cons, fromEnum', toEnum', pinch', unpinchAlts') = unzip5 $ map gEnumDef $ zip [0..] $ enumValues e
@@ -358,6 +363,9 @@ structDatatype nm fs = do
     ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
     ] else [])
+      ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon nm)) []
+    ] else [])
 
 data ServiceResultCon = SRCNone | SRCVoid H.Name
 
@@ -418,6 +426,9 @@ unionDatatype nm fs defCon = do
       , H.InstDecl (H.InstHead [] clPinchable (H.TyCon nm)) [ stag, pinch, unpinch ]
     ] ++ (if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon nm)) [ arbitrary ]
+    ] else [])
+    ++ (if sGenerateNFData settings then [
+      H.InstDecl (H.InstHead [] clNFData (H.TyCon nm)) []
     ] else [])
 
 gField :: T.Text -> (Integer, Field SourcePos) -> GenerateM (Integer, H.Name, H.Type, Bool)
@@ -539,11 +550,12 @@ tag = H.TyCon $ "Tag"
 tyUnit = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
 
-clPinchable, clHashable, clException, clArbitrary :: H.ClassName
+clPinchable, clHashable, clException, clArbitrary, clNFData :: H.ClassName
 clPinchable = "Pinch.Pinchable"
 clHashable = "Data.Hashable.Hashable"
 clException = "Control.Exception.Exception"
 clArbitrary = "Test.QuickCheck.Arbitrary"
+clNFData = "Control.DeepSeq.NFData"
 
 decapitalize :: T.Text -> T.Text
 decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.tail s

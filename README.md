@@ -21,7 +21,7 @@ Usage:
 
 ```
 Usage: pinch-gen --in IN_FILE --out OUT_DIR --hashable-vec-mod ARG
-                 [--no-generate-arbitrary] [--extra-import IMPORT]
+                 [--no-generate-arbitrary] [--no-generate-nfdata] [--extra-import IMPORT]
   Generate Haskell files from a thrift input file.
 ```
 
@@ -75,7 +75,7 @@ service Trivial {
 To generate the corresponding Haskell code we can call pinch-gen:
 
 ```
-pinch-gen --no-generate-arbitrary --hashable-vec-mod Data.Vector.Instances --in trivial.thrift --out out/
+pinch-gen --no-generate-arbitrary --no-generate-nfdata --hashable-vec-mod Data.Vector.Instances --in trivial.thrift --out out/
 ```
 
 This will create the appropriate datatypes for all struct, union and exception types:
