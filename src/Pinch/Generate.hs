@@ -135,6 +135,7 @@ gProgram s inp (Program headers defs) = do
     defaultImports =
       [ H.ImportDecl (H.ModuleName "Prelude") True H.IEverything
       , H.ImportDecl (H.ModuleName "Control.Applicative") True H.IEverything
+      , H.ImportDecl (H.ModuleName "Control.DeepSeq") True H.IEverything
       , H.ImportDecl (H.ModuleName "Control.Exception") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch") True H.IEverything
       , H.ImportDecl (H.ModuleName "Pinch.Server") True H.IEverything
@@ -258,6 +259,7 @@ gEnum e = do
       , H.FunBind (toEnum' ++ [toEnumDef])
       ]
     , H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
+    , H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
     ] ++ if sGenerateArbitrary settings then [
       H.InstDecl (H.InstHead [] clArbitrary (H.TyCon tyName)) [
         H.FunBind [ arbitrary ]
@@ -302,12 +304,13 @@ gEnumDef (i, ed) =
 
 gStruct :: Struct SourcePos -> GenerateM [H.Decl]
 gStruct s = case structKind s of
-  UnionKind -> (++ [hashable]) <$> unionDatatype tyName (structFields s) SRCNone
-  StructKind -> (++ [hashable]) <$> structDatatype tyName (structFields s)
-  ExceptionKind -> (++ [hashable, ex]) <$>  structDatatype tyName (structFields s)
+  UnionKind -> (++ [hashable, nfdata]) <$> unionDatatype tyName (structFields s) SRCNone
+  StructKind -> (++ [hashable, nfdata]) <$> structDatatype tyName (structFields s)
+  ExceptionKind -> (++ [hashable, nfdata, ex]) <$>  structDatatype tyName (structFields s)
   where
     tyName = structName s
     hashable = H.InstDecl (H.InstHead [] clHashable (H.TyCon tyName)) []
+    nfdata = H.InstDecl (H.InstHead [] clNFData (H.TyCon tyName)) []
     ex = H.InstDecl (H.InstHead [] clException (H.TyCon tyName)) []
 
 
@@ -539,11 +542,12 @@ tag = H.TyCon $ "Tag"
 tyUnit = H.TyCon $ "()"
 tyIO = H.TyCon $ "Prelude.IO"
 
-clPinchable, clHashable, clException, clArbitrary :: H.ClassName
+clPinchable, clHashable, clException, clArbitrary, clNFData :: H.ClassName
 clPinchable = "Pinch.Pinchable"
 clHashable = "Data.Hashable.Hashable"
 clException = "Control.Exception.Exception"
 clArbitrary = "Test.QuickCheck.Arbitrary"
+clNFData = "Control.DeepSeq.NFData"
 
 decapitalize :: T.Text -> T.Text
 decapitalize s = if T.null s then "" else T.singleton (toLower $ T.head s) <> T.tail s
