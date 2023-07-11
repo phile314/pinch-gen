@@ -5,12 +5,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc: ['8.8.3', '8.10.2', '9.0.1', '9.2.1']
+        ghc: ['9.2.8', '9.4.5', '9.6.2']
         os: [ubuntu-latest, macOS-latest, windows-latest]
-        exclude:
-          # a test suite dependency fails on windows/ghc8.8.3
-          - os: windows-latest
-            ghc: '8.8.3'
       fail-fast: false
     name: Build with GHC ${{ matrix.ghc }} on ${{ matrix.os }}
     steps:
