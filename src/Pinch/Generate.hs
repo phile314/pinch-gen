@@ -446,27 +446,27 @@ gService s = do
   settings <- asks cSettings
   (nms, tys, handlers, calls, tyDecls) <- unzip5 <$> traverse gFunction (serviceFunctions s)
 
-  let (additionalImports, baseService) = case serviceExtends s of
+  let (additionalImports, baseService, baseFunction) = case serviceExtends s of
         Just baseServiceIdentifier -> do
           case T.splitOn "." baseServiceIdentifier of
             [importSource, baseServiceName] -> do
               let importModule = (getModuleName settings headers $ T.unpack importSource) <> ".Server"
-              ([importModule], [("baseServer", H.TyCon $ importModule <> "." <> baseServiceName)])
-            _ -> ([], [])
-        Nothing -> ([], [])
+              ([importModule], [("baseServer", H.TyCon $ importModule <> "." <> baseServiceName)], ".functions_" <> baseServiceName)
+            _ -> ([], [], "")
+        Nothing -> ([], [], "")
   let extensionFunction = case additionalImports of
         [] -> ""
-        imports -> head imports <> ".functions (baseServer server) `Data.HashMap.Strict.union` " 
+        imports -> head imports <> baseFunction <> " (baseServer server) `Data.HashMap.Strict.union` " 
   let serverDecls =
         [ H.DataDecl serviceTyName [ H.RecConDecl serviceConName $ baseService <> zip nms tys ] []
         , H.TypeSigDecl 
-            "functions" 
+            ("functions_" <> serviceConName)
             ( H.TyLam 
                 [H.TyCon serviceConName] 
                 (H.TyCon "Data.HashMap.Strict.HashMap Data.Text.Text Pinch.Server.Handler")
             )
         , H.FunBind
-          [ H.Match "functions" [H.PVar "server"]
+          [ H.Match ("functions_" <> serviceConName) [H.PVar "server"]
             ( H.EApp (H.EVar (extensionFunction <> "Data.HashMap.Strict.fromList")) [ H.EList handlers ] )
           ]
         , H.TypeSigDecl (prefix <> "_mkServer") (H.TyLam [H.TyCon serviceConName] (H.TyCon "Pinch.Server.ThriftServer"))
@@ -475,7 +475,7 @@ gService s = do
             ( H.EApp "Pinch.Server.createServer"
               [ (H.ELam ["nm"]
                   (H.EApp "Data.HashMap.Strict.lookup"
-                    [ "nm", "functions server" ]
+                    [ "nm", H.EVar $ "functions_" <> serviceConName <> " server" ]
                   )
                 )
               ]
