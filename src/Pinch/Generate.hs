@@ -475,11 +475,11 @@ gFieldType f = do
 
 gFunction :: Function SourcePos -> GenerateM (H.Name, H.Type, H.Exp, [H.Decl], [H.Decl])
 gFunction f = do
-  argTys <- traverse (fmap snd . gFieldType) (functionParameters f)
+  argTys <- traverse (fmap snd . gFieldType) (A.functionParameters f)
   retType <- maybe (pure tyUnit) gTypeReference (functionReturnType f)
 
 
-  argDataTy <- structDatatype argDataTyNm (functionParameters f)
+  argDataTy <- structDatatype argDataTyNm (A.functionParameters f)
   let catchers = map
         (\e -> H.EApp "Control.Exception.Handler"
           [ H.EInfix "Prelude.." "Prelude.pure" (H.EVar $ dtNm <> "_" <> capitalize (fieldName e))
@@ -519,10 +519,10 @@ gFunction f = do
   let clientFunTy = H.TyLam argTys (H.TyApp (H.TyCon "Pinch.Client.ThriftCall") [resultDataTy])
   let callSig = H.TypeSigDecl nm $ clientFunTy
   let call = H.FunBind
-        [ H.Match nm ( map (H.PVar . fieldName) $ functionParameters f)
+        [ H.Match nm ( map (H.PVar . fieldName) $ A.functionParameters f)
           ( H.EApp (if functionOneWay f then "Pinch.Client.TOneway" else "Pinch.Client.TCall")
             [ H.ELit $ H.LString $ functionName f
-            , H.EApp (H.EVar argDataTyNm) $ map (H.EVar . fieldName) (functionParameters f)
+            , H.EApp (H.EVar argDataTyNm) $ map (H.EVar . fieldName) (A.functionParameters f)
             ]
           )
         ]
@@ -542,7 +542,7 @@ gFunction f = do
   where
     nm = decapitalize $ functionName f
     dtNm = capitalize (functionName f) <> "_Result"
-    argVars = take (length $ functionParameters f) $ map T.singleton ['a'..]
+    argVars = take (length $ A.functionParameters f) $ map T.singleton ['a'..]
     argDataTyNm = capitalize $ functionName f <> "_Args"
     exceptions = concat $ maybeToList $ functionExceptions f
 
