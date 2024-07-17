@@ -154,8 +154,15 @@ instance Pretty Deriving where
 
 instance Pretty ConDecl where
   pretty (ConDecl n args) = hsep $ [ pretty n ] ++ map pretty args
-  pretty (RecConDecl n args) = hsep $ [ pretty n, "{", fields, "}" ]
-    where fields = cList $ map (\(f, v) -> pretty f <+> "::" <+> pretty v) args
+  pretty (RecConDecl n fields) = pretty n
+    <> case fields of
+      [] -> "{}"
+      ((f, t) : xs) -> line
+        <> "{" <+> pretty f <+> "::" <+> pretty t
+          <> line
+          <> vsep (map (\(f', v) -> "," <+> pretty f' <+> "::" <+> pretty v) xs)
+          <> line
+          <> "}"
 
 instance Pretty InstHead where
   pretty (InstHead cs n ty) = "instance" <> context <+> pretty n <+> pretty ty <+> "where"
